@@ -1,3 +1,51 @@
+export const GRADES = ["A+", "A", "A-", "B+", "B", "B-"];
+export const GRADE_WIDTH = 3;
+
+type Stroke = [number, number][];
+
+/* Letters drawn as marker strokes, in a box one unit high. Fonts in PDF annotations are too limited. */
+const GLYPHS: Record<string, { width: number; strokes: Stroke[] }> = {
+  A: { width: 0.72, strokes: [[[0, 1], [0.36, 0], [0.72, 1]], [[0.13, 0.64], [0.6, 0.62]]] },
+  B: {
+    width: 0.62,
+    strokes: [
+      [[0.02, 0], [0, 1]],
+      [[0, 0], [0.34, 0], [0.5, 0.08], [0.54, 0.24], [0.46, 0.4], [0.28, 0.48], [0, 0.48]],
+      [[0, 0.48], [0.36, 0.48], [0.56, 0.58], [0.62, 0.75], [0.54, 0.91], [0.34, 1], [0, 1]],
+    ],
+  },
+  "+": { width: 0.42, strokes: [[[0.21, 0.28], [0.21, 0.72]], [[0, 0.5], [0.42, 0.5]]] },
+  "-": { width: 0.36, strokes: [[[0, 0.5], [0.36, 0.5]]] },
+};
+
+/** A grade as pen strokes, circled by hand. The page and the saved PDF both draw these. */
+export function gradeStrokes(box: Box & { text: string }): Stroke[] {
+  const height = box.h * 0.5;
+  const gap = 0.14;
+  const glyphs = [...box.text].map((character) => GLYPHS[character]).filter(Boolean);
+  const total = glyphs.reduce((sum, glyph) => sum + glyph.width, 0) + gap * (glyphs.length - 1);
+  let left = box.x + (box.w - total * height) / 2;
+  const top = box.y + (box.h - height) / 2;
+  const strokes: Stroke[] = [];
+  for (const glyph of glyphs) {
+    for (const stroke of glyph.strokes) {
+      strokes.push(stroke.map(([x, y]) => [left + x * height, top + y * height]));
+    }
+    left += (glyph.width + gap) * height;
+  }
+  const ring: Stroke = [];
+  for (let step = 0; step <= 30; step += 1) {  // a little past a full turn, like a hand closing a circle
+    const angle = -1.9 + (step / 30) * (2 * Math.PI + 0.45);
+    const drift = 1 + 0.05 * (step / 30);
+    ring.push([
+      box.x + box.w / 2 + (box.w / 2 - 2) * drift * Math.cos(angle) * 0.96,
+      box.y + box.h / 2 + (box.h / 2 - 2) * drift * Math.sin(angle) * 0.96,
+    ]);
+  }
+  strokes.push(ring);
+  return strokes;
+}
+
 export type Tool = "select" | "tick" | "cross" | "highlight" | "text" | "circle" | "line" | "arrow";
 export type MarkType = Exclude<Tool, "select">;
 
@@ -44,6 +92,8 @@ export interface NoteMark extends Base, Box {
   text: string;
   anchor?: string;
   leader?: Leader;
+  grade?: boolean;  // the submission's grade, stamped on the first page
+  ink?: [number, number][][];  // its strokes, worked out when saving
 }
 
 export type Mark = BoxMark | LineMark | NoteMark;

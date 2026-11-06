@@ -5,8 +5,10 @@ are copied to a temporary folder under neutral names, so the student's file name
 is not sent.
 
 The agent is shut in: it loads none of the person's settings, hooks, plugins,
-skills or MCP servers, and its only tools are Read, confined to that folder, and
-the seven marking tools in marker_tools.py. Each tool call streams back as it
+skills or MCP servers. Its only tools are Read, confined to that folder, the seven
+marking tools in marker_tools.py, and run_answer, which runs the teacher's reference
+code by file name. It can't run anything else, so student code is never run. Each
+tool call streams back as it
 happens, so the page shows the reasoning and each mark live. Marks land on the
 page as ordinary marks: the person deletes what they don't want, and saves.
 """
@@ -32,6 +34,7 @@ TOOL_PREFIX = "mcp__marker__"
 MAX_COMMENT = 1000
 MAX_LOG_LINES = 400
 MAX_LOG_TEXT = 500
+OUTPUT_LINES = 8  # of each run, in the reasoning panel
 
 SYSTEM_PROMPT = """You are helping a teacher mark a student's work. Your folder is {folder} and it holds:
 
@@ -47,9 +50,17 @@ Your marking tools are the teacher's own, and the only way to mark. Call them by
 mcp__marker__tick, mcp__marker__cross, mcp__marker__highlight, mcp__marker__comment, mcp__marker__circle, mcp__marker__line, mcp__marker__arrow.
 On a page with no text lines, leave out line and give x and y as fractions of the page from 0 to 1.
 
+When a reference answer is a reference_N.py file, run it yourself with mcp__marker__run_answer before you mark, and don't guess what it prints. Then for each question:
+1. Compare the output printed in the submission with the answer's real output, line by line.
+2. Tick output only after you have seen it match.
+3. If something differs, debug by reading the student's code: work out which line causes the difference and why, then mark that line and say what you found.
+4. Say so when the submission shows no output for something the answer prints, or prints less of it.
+Timings and memory addresses differ between runs, and formatting may differ: that isn't a mistake. You can only run reference files. Never try to run the student's code.
+
 Work through the submission in order. The teacher is watching live:
 - Write short working notes in Simplified Chinese, one per line, on what you are checking and what you find.
 - Call a marking tool as soon as you decide on a mark. Don't save marks for the end.
+- When you have finished, give the submission exactly one grade with mcp__marker__grade: A+, A, A-, B+, B or B-. Follow the teacher's marking rules if they define the grades.
 - Finish with one line starting with SUMMARY, then two or three sentences in English on the work as a whole.
 {instruction}"""
 
@@ -75,6 +86,15 @@ class Placer:
         self.table = {(line["page"], line["line"]): line["box"] for line in lines}
         self.pages = pages
         self.note_bottom = {}
+        self.graded = False
+
+    def grade(self, letter):
+        """One grade per submission, top right of the first page."""
+        if self.graded or letter not in marker_tools.GRADES:
+            return []
+        self.graded = True
+        return [{"id": str(uuid.uuid4()), "page": 0, "type": "text", "color": RED, "x": self.pages[0]["w"] - 86, "y": 14,
+                 "w": 70, "h": 52, "size": 24, "text": letter, "grade": True}]
 
     def box_for(self, item, page):
         box = self.table.get((page, item.get("line")))
@@ -144,6 +164,7 @@ class Reader:
         self.buffers = {"note": "", "thought": ""}
         self.finished = False
         self.failure = None
+        self.runs = set()
 
     def log(self, kind, text):
         text = text.strip()
@@ -172,11 +193,24 @@ class Reader:
             self.buffers[kind] = ""
         self.job["draft"] = ""
 
-    def tool(self, name, arguments):
-        if name.startswith(TOOL_PREFIX):
+    def tool(self, name, arguments, call=None):
+        if name == TOOL_PREFIX + marker_tools.RUN_TOOL:
+            self.runs.add(call)
+            self.log("run", f"运行参考答案 {arguments.get('file', '')}")
+        elif name == TOOL_PREFIX + marker_tools.GRADE_TOOL:
+            self.job["marks"].extend(self.placer.grade(arguments.get("letter")))
+        elif name.startswith(TOOL_PREFIX):
             self.job["marks"].extend(self.placer.place({**arguments, "kind": name[len(TOOL_PREFIX):]}))
         elif name == "Read":
             self.log("read", "读取 " + Path(str(arguments.get("file_path", ""))).name)
+
+    def run_output(self, blocks):
+        for block in blocks if isinstance(blocks, list) else []:
+            if isinstance(block, dict) and block.get("tool_use_id") in self.runs:
+                content = block.get("content")
+                parts = content if isinstance(content, list) else [{"text": str(content)}]
+                text = "\n".join(str(part.get("text", "")) for part in parts if isinstance(part, dict))
+                self.log("output", "\n".join(text.strip().splitlines()[:OUTPUT_LINES]))
 
     def feed(self, raw):
         try:
@@ -196,7 +230,9 @@ class Reader:
         elif kind == "assistant":
             for block in event.get("message", {}).get("content", []):
                 if block.get("type") == "tool_use":
-                    self.tool(block.get("name", ""), block.get("input", {}))
+                    self.tool(block.get("name", ""), block.get("input", {}), block.get("id"))
+        elif kind == "user":
+            self.run_output(event.get("message", {}).get("content", []))
         elif kind == "result":
             self.flush()
             self.finished = True
@@ -219,7 +255,7 @@ def agent_flags():
     return [*(["--effort", effort] if effort else []), "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
             "--no-session-persistence", "--setting-sources", "", "--strict-mcp-config", "--mcp-config", "tools.json",
             "--disable-slash-commands", "--system-prompt-file", "system.txt", "--tools", "Read",
-            "--allowedTools", *[TOOL_PREFIX + name for name in marker_tools.TOOLS]]
+            "--allowedTools", *[TOOL_PREFIX + name for name in [*marker_tools.TOOLS, marker_tools.GRADE_TOOL, marker_tools.RUN_TOOL]]]
 
 
 def to_marks(items, lines, pages):
@@ -306,16 +342,15 @@ class Jobs:
                 (work / "submission.pdf").write_bytes(data)
                 table = [{key: line[key] for key in ("page", "line", "text")} for line in lines]
                 (work / "lines.json").write_text(json.dumps(table, ensure_ascii=False), encoding="utf-8")
-                names = []
+                listing = ""
                 for number, (suffix, content) in enumerate(references, 1):
                     name = f"reference_{number}{suffix}"
                     (work / name).write_bytes(content)
-                    names.append(name)
-                listing = "".join(f"- {name}: the correct answer. Read it and mark against it.\n" for name in names)
+                    listing += f"- {name}: the correct answer. Read it and mark against it.\n"
                 note = f"\nThe teacher's marking rules:\n{instruction}\n" if instruction else ""
                 system = SYSTEM_PROMPT.format(folder=work, references=listing, instruction=note)
                 (work / "system.txt").write_text(system, encoding="utf-8")
-                server = {"type": "stdio", "command": sys.executable, "args": [marker_tools.__file__]}
+                server = {"type": "stdio", "command": sys.executable, "args": [marker_tools.__file__, str(work)]}
                 (work / "tools.json").write_text(json.dumps({"mcpServers": {"marker": server}}), encoding="utf-8")
                 process = subprocess.Popen(
                     [*command, *agent_flags()], cwd=work,

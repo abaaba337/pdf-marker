@@ -43,6 +43,7 @@ function FileButton({ row, active }: { row: FileRow; active: boolean }) {
   return (
     <button className={"file" + (active ? " on" : "")} title={row.name} onClick={() => void openFile(row.file)}>
       <span className="name">{row.name}</span>
+      {row.grade && <span className="gradeTag">{row.grade}</span>}
       {row.marks > 0 && <span className="badge">{row.marks}</span>}
     </button>
   );

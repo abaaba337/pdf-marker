@@ -1,7 +1,7 @@
 import hljs from "highlight.js/lib/common";
 import { useMemo } from "react";
 import { type ReferenceView, closeReference, referencePage } from "@/lib/store";
-import { Resizer, REFERENCE } from "./Resizer";
+import { REFERENCE, REFERENCE_HEIGHT, Resizer } from "./Resizer";
 
 /* Scripts can't run and nothing can load from outside: sandbox plus this policy. */
 const SAFE_HTML = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:">`;
@@ -37,14 +37,16 @@ function View({ name, view }: { name: string; view: ReferenceView }) {
 
 interface Props {
   reference: { name: string; view: ReferenceView };
-  width: number;
-  onResize: (width: number) => void;
+  size: number;  // its width beside the work, or its height below it
+  stacked: boolean;
+  onResize: (size: number) => void;
 }
 
-export function ReferencePane({ reference, width, onResize }: Props) {
+export function ReferencePane({ reference, size, stacked, onResize }: Props) {
+  const fallback = stacked ? REFERENCE_HEIGHT.fallback : REFERENCE.fallback;
   return (
     <section id="reference" aria-label="参考答案">
-      <Resizer width={width} fallback={REFERENCE.fallback} onResize={onResize} side="left" />
+      <Resizer width={size} fallback={fallback} onResize={onResize} side={stacked ? "top" : "left"} />
       <header>
         <span className="name" title={reference.name}>
           参考答案 · {reference.name}

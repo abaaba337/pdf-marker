@@ -19,6 +19,8 @@ MARKS = [
     {"id": "4", "type": "text", "page": 0, "color": "#d92b2b", "x": 72, "y": 200, "w": 190, "h": 20,
      "size": 11, "text": NASTY, "anchor": "2",
      "leader": {"x1": 97, "y1": 67, "x2": 97, "y2": 200, "color": "#d92b2b", "width": 0.6}},
+    {"id": "g", "type": "text", "page": 0, "color": "#d92b2b", "x": 509, "y": 14, "w": 70, "h": 52, "size": 24,
+     "text": "A-", "grade": True, "width": 3, "ink": [[[520, 60], [540, 20], [560, 60]], [[525, 45], [555, 45]]]},
     {"id": "5", "type": "circle", "page": 1, "color": "#d92b2b", "width": 2, "x": 100, "y": 100, "w": 200, "h": 100},
     {"id": "6", "type": "line", "page": 1, "color": "#2563eb", "width": 2, "x1": 50, "y1": 50, "x2": 200, "y2": 60},
     {"id": "9", "type": "line", "page": 1, "color": "#d92b2b", "width": 2, "x1": 50, "y1": 90, "x2": 200, "y2": 90,
@@ -73,7 +75,9 @@ def check_saving(path):
     with fitz.open(path) as doc:
         assert read_marks(doc) == MARKS, "marks must come back exactly as saved"
     assert len(annots(path)) == len(MARKS) + 2, "leader line and other tools' annotation must be there"
-    with fitz.open(path) as doc:
+    with fitz.open(path) as doc:  # a grade is drawn, so it needs no font in any viewer
+        stamps = [(a.type[1], a.border["width"]) for a in doc[0].annots() if a.rect.x0 > 500 and a.rect.y1 < 80]
+        assert stamps == [("Ink", 3)], stamps
         heads = [annot.line_ends[1] for annot in doc[1].annots() if annot.type[1] == "Line"]
         assert sorted(heads) == [fitz.PDF_ANNOT_LE_NONE, fitz.PDF_ANNOT_LE_CLOSED_ARROW], heads
     assert backup.read_bytes() == original, "backup must be the first version"
@@ -115,7 +119,8 @@ def check_workspace(root):
     tree = site.tree()
     found = {g["dir"]: [f["name"] for f in g["files"]] for g in tree["groups"]}
     assert found == {".": ["broken.pdf", "sheet.pdf"], "Sheet 2/deep": ["b.pdf"]}, found
-    assert next(f for g in tree["groups"] for f in g["files"] if f["name"] == "sheet.pdf")["marks"] == len(MARKS)
+    row = next(f for g in tree["groups"] for f in g["files"] if f["name"] == "sheet.pdf")
+    assert row["marks"] == len(MARKS) and row["grade"] == "A-", row
 
     save_marks(root / "sheet.pdf", [])  # the count must follow the file, not the cache
     assert next(f for g in site.tree()["groups"] for f in g["files"] if f["name"] == "sheet.pdf")["marks"] == 0
@@ -146,6 +151,40 @@ def check_site(root):
     assert server.site_file("/_next/app.js").name == "app.js"
     for bad in ("/../secret.pdf", "/_next/../../secret.pdf", "/missing.js", "/_next"):
         assert server.site_file(bad) is None, bad
+
+
+def check_answer_run(root):
+    marker_tools.ANSWER_CACHE = root / "answers-cache"
+    folder = root / "agent-folder"
+    folder.mkdir()
+    run = marker_tools.run_answer
+    (folder / "reference_1.py").write_text("print('from the answer', 6 * 7)")
+    assert run(folder, "reference_1.py").strip() == "from the answer 42"
+    (folder / "reference_2.py").write_text("print('from the answer', 6 * 7)")
+    assert len(list(marker_tools.ANSWER_CACHE.glob("*"))) == 1, "one version runs once"
+    assert run(folder, "reference_2.py").strip() == "from the answer 42"
+
+    (folder / "reference_3.py").write_text("print('so far')\nraise ValueError('broken answer')")
+    output = run(folder, "reference_3.py")
+    assert "so far" in output and "broken answer" in output, "a failing answer shows why"
+    assert len(list(marker_tools.ANSWER_CACHE.glob("*"))) == 1, "failures are not kept"
+
+    # only reference files: nothing the student wrote can be run
+    (folder / "student.py").write_text("print('student code ran')")
+    (folder / "submission.pdf").write_text("print('student code ran')")
+    outside = root / "reference_9.py"
+    outside.write_text("print('student code ran')")
+    for bad in ("student.py", "submission.pdf", "../reference_9.py", str(outside), "reference_4.py", "print('x')", ""):
+        assert "No such reference file" in run(folder, bad), bad
+    call = {"method": "tools/call", "params": {"name": "run_answer", "arguments": {"file": "reference_1.py"}}}
+    assert "42" in marker_tools.answer(call, folder)["content"][0]["text"]
+    assert "code" not in marker_tools.tool_list()[-1]["inputSchema"]["properties"], "the tool can't be handed code"
+
+    marker_tools.ANSWER_SECONDS = 1
+    (folder / "reference_5.py").write_text("print('start', flush=True)\nwhile True: pass")
+    output = run(folder, "reference_5.py")
+    assert "start" in output and "stopped after 1 seconds" in output
+    marker_tools.ANSWER_SECONDS = 180
 
 
 def check_claude(root):
@@ -207,6 +246,15 @@ def check_claude(root):
     assert [n["text"] for n in job["log"]] == ["plan", "读取 submission.pdf", "正在看"], job["log"]
     assert [m["type"] for m in job["marks"]] == ["tick"] and job["summary"] == "fine" and reader.finished
 
+    job, _ = stream(
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "r1", "name": "mcp__marker__run_answer", "input": {"file": "reference_1.py"}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "r1", "content": [{"type": "text", "text": "1\n4\n9"}]},
+            {"type": "tool_result", "tool_use_id": "other", "content": "not shown"}]}},
+    )
+    assert [(n["kind"], n["text"]) for n in job["log"]] == [("run", "运行参考答案 reference_1.py"), ("output", "1\n4\n9")]
+
     job, _ = stream(text("half a no"))
     assert job["draft"] == "half a no" and job["log"] == [], "unfinished text shows as a draft"
     job, _ = stream(text("SUMMARY half"))
@@ -242,10 +290,11 @@ def check_claude(root):
     assert flags[flags.index("--setting-sources") + 1] == "", "no user, project or local settings"
     assert flags[flags.index("--tools") + 1] == "Read", "no other built-in tool"
     allowed = flags[flags.index("--allowedTools") + 1:]
-    assert sorted(allowed) == sorted("mcp__marker__" + name for name in toolbar)
+    assert sorted(allowed) == sorted("mcp__marker__" + name for name in [*toolbar, "grade", "run_answer"])
     assert not any(flag.startswith("--dangerously") or flag == "--permission-mode" for flag in flags)
     names = [tool["name"] for tool in marker_tools.tool_list()]
-    assert sorted(names) == sorted(toolbar), "the agent's tools are the toolbar"
+    assert sorted(names) == sorted([*toolbar, "grade", "run_answer"]), "the toolbar, a grade, and the reference answer"
+    assert "run_answer" not in claude_marker.KINDS, "running an answer is not a mark"
     assert marker_tools.answer({"method": "tools/call", "params": {"name": "bash"}})["isError"]
 
     # turned-down proposals are remembered, during a run and after it
@@ -260,6 +309,14 @@ def check_claude(root):
     assert jobs.status(pdf)["rejected"] == ["b"]
     del jobs.running[pdf]
     claude_marker.result_path(pdf).unlink()
+
+    # one grade, from the agreed scale
+    job, _ = stream({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "mcp__marker__grade", "input": {"letter": "Z"}},
+        {"type": "tool_use", "name": "mcp__marker__grade", "input": {"letter": "B+"}},
+        {"type": "tool_use", "name": "mcp__marker__grade", "input": {"letter": "A+"}}]}})
+    assert [(m["text"], m["grade"], m["page"]) for m in job["marks"]] == [("B+", True, 0)]
+    assert job["marks"][0]["x"] + job["marks"][0]["w"] <= 595
 
     # only real reads are reported as reads
     job, _ = stream({"type": "assistant", "message": {"content": [
@@ -277,14 +334,13 @@ def check_claude(root):
     claude_marker.SETTINGS.write_text(json.dumps({"effortLevel": "--dangerously-skip-permissions"}))
     assert "--effort" not in claude_marker.agent_flags(), "only known levels"
 
-    # marking rules apply to a folder and below; the nearest ones win
-    assert site.guidance("sheet.pdf") == ""
-    site.save_guidance(None, "general rules")
-    assert site.guidance("Sheet 2/deep/b.pdf") == "general rules"
-    site.save_guidance("Sheet 2/deep/b.pdf", "this sheet")
-    assert site.guidance("Sheet 2/deep/b.pdf") == "this sheet"
-    assert site.guidance("sheet.pdf") == "general rules"
+    # marking rules belong to the whole workspace
+    assert site.guidance() == ""
+    site.save_guidance("rules")
+    assert site.guidance() == "rules"
     assert all(".marker" not in g["dir"] for g in site.tree()["groups"])
+
+    check_answer_run(root)
 
     # reference answers, read-only views
     answers = root / "answers"

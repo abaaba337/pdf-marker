@@ -56,7 +56,8 @@ function Proposal({ mark, note, rejected }: ProposalProps) {
     <div className={"proposal" + (rejected ? " rejected" : "")}>
       <div className="row">
         <span className="kind">
-          第 {mark.page + 1} 页 · {mark.type === "line" && mark.arrow ? "箭头" : KIND_LABEL[mark.type]}
+          第 {mark.page + 1} 页 ·{" "}
+          {mark.type === "text" && mark.grade ? "等第" : mark.type === "line" && mark.arrow ? "箭头" : KIND_LABEL[mark.type]}
         </span>
         {rejected ? (
           <button className="secondary" onClick={() => restoreMark(mark.id)}>
@@ -119,7 +120,7 @@ export function ClaudePanel({ state, width, onResize }: PanelProps) {
         <h3>批改规范</h3>
         <textarea
           value={instruction}
-          placeholder="写下批改要求，这个文件夹的每一份都会用"
+          placeholder="写下批改要求和等第标准，这个工作区的每一份都会用"
           onChange={(event) => setInstruction(event.target.value)}
           onBlur={() => void saveGuidance()}
         />

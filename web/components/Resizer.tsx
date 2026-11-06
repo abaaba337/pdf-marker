@@ -26,6 +26,7 @@ export interface WidthRange {
 export const SIDEBAR: WidthRange = { key: "pdf-marker-sidebar", fallback: 272, min: 200, max: 600 };
 export const PANEL: WidthRange = { key: "pdf-marker-panel", fallback: 340, min: 260, max: 760 };
 export const REFERENCE: WidthRange = { key: "pdf-marker-reference", fallback: 420, min: 280, max: 1000 };
+export const REFERENCE_HEIGHT: WidthRange = { key: "pdf-marker-reference-height", fallback: 320, min: 140, max: 800 };
 
 /** A panel width the person can drag, remembered in this browser. */
 export function useWidth({ key, fallback, min, max }: WidthRange) {
@@ -46,16 +47,17 @@ interface Props {
   width: number;
   fallback: number;
   onResize: (width: number) => void;
-  side: "left" | "right";  // the edge of the panel this handle sits on
+  side: "left" | "right" | "top";  // the edge of the panel this handle sits on
 }
 
 export function Resizer({ width, fallback, onResize, side }: Props) {
-  const start = (event: PointerEvent<HTMLDivElement>) => {
+  const begin = (event: PointerEvent<HTMLDivElement>) => {
     const handle = event.currentTarget;
-    const startX = event.clientX;
+    const position = (e: { clientX: number; clientY: number }) => (side === "top" ? e.clientY : e.clientX);
+    const start = position(event);
     const direction = side === "right" ? 1 : -1;
     handle.setPointerCapture(event.pointerId);
-    handle.onpointermove = (move) => onResize(width + direction * (move.clientX - startX));
+    handle.onpointermove = (move) => onResize(width + direction * (position(move) - start));
     handle.onpointerup = () => {
       handle.onpointermove = null;
     };
@@ -64,10 +66,10 @@ export function Resizer({ width, fallback, onResize, side }: Props) {
     <div
       className={`resizer ${side}`}
       role="separator"
-      aria-orientation="vertical"
-      aria-label="调整宽度"
-      title="拖动调整宽度，双击恢复默认"
-      onPointerDown={start}
+      aria-orientation={side === "top" ? "horizontal" : "vertical"}
+      aria-label={side === "top" ? "调整高度" : "调整宽度"}
+      title={`拖动调整${side === "top" ? "高度" : "宽度"}，双击恢复默认`}
+      onPointerDown={begin}
       onDoubleClick={() => onResize(fallback)}
     />
   );

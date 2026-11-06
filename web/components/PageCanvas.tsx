@@ -1,5 +1,5 @@
 import { type PointerEvent, useEffect, useLayoutEffect, useRef } from "react";
-import { type Mark, type NoteMark, LEADER_WIDTH, bounds, leaderEnds } from "@/lib/marks";
+import { GRADE_WIDTH, type Mark, type NoteMark, LEADER_WIDTH, bounds, gradeStrokes, leaderEnds } from "@/lib/marks";
 import {
   deleteClaudeMark,
   doubleClick,
@@ -67,6 +67,18 @@ function Shape({ mark }: { mark: Exclude<Mark, NoteMark> }) {
       <path d={d} {...HIT} />
       <path d={d} {...stroke} />
     </>
+  );
+}
+
+function GradeStamp({ note }: { note: NoteMark }) {
+  const d = gradeStrokes(note)
+    .map((stroke) => "M" + stroke.map(([x, y]) => `${x} ${y}`).join("L"))
+    .join("");
+  return (
+    <g className="gradeStamp" data-letter={note.text}>
+      <rect x={note.x} y={note.y} width={note.w} height={note.h} fill="transparent" />
+      <path d={d} fill="none" stroke={note.color} strokeWidth={GRADE_WIDTH} strokeLinecap="round" strokeLinejoin="round" />
+    </g>
   );
 }
 
@@ -230,7 +242,9 @@ export function PageCanvas({ n, page, state }: Props) {
         })}
         {here.map((m) => (
           <g key={m.id} data-id={m.id}>
-            {m.type === "text" ? (
+            {m.type === "text" && m.grade ? (
+              <GradeStamp note={m} />
+            ) : m.type === "text" ? (
               <foreignObject x={m.x} y={m.y} width={m.w} height={m.h}>
                 {editing === m.id ? <NoteEditor note={m} draft={draft} /> : <NoteText note={m} />}
               </foreignObject>

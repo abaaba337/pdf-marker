@@ -104,7 +104,10 @@ def add_mark(doc, page, mark):
 
     kind = mark["type"]
     color = rgb(mark["color"])
-    if kind in SHAPES:
+    grade = mark.get("grade")
+    if grade:  # drawn as marker strokes, so it looks the same in every viewer
+        annot = page.add_ink_annot([[tuple(point(x, y)) for x, y in stroke] for stroke in mark["ink"]])
+    elif kind in SHAPES:
         strokes = [[tuple(point(mark["x"] + u * mark["w"], mark["y"] + v * mark["h"]))
                     for u, v in stroke] for stroke in SHAPES[kind]]
         annot = page.add_ink_annot(strokes)
@@ -129,9 +132,9 @@ def add_mark(doc, page, mark):
                 fill_color=NOTE_FILL, rotate=page.rotation, border_width=0)
         else:
             raise ValueError(f"unknown mark type: {kind}")
-    if kind != "text":
+    if kind != "text" or grade:
         annot.set_colors(stroke=color, fill=color if mark.get("arrow") else None)  # a solid head
-    if kind in SHAPES or kind in ("line", "circle"):
+    if grade or kind in SHAPES or kind in ("line", "circle"):
         annot.set_border(width=mark.get("width", 2))
     annot.set_info(title="Marker")
     annot.update()
@@ -180,7 +183,7 @@ def site_file(url_path):
 class Workspace:
     def __init__(self, root=None):
         self.root = None
-        self.counts = {}  # path -> (modified time, marks), so listing does not reopen every PDF
+        self.counts = {}  # path -> (modified time, marks, grade), so listing does not reopen every PDF
         if root and Path(root).is_dir():
             self.root = Path(root).resolve()
 
@@ -188,18 +191,19 @@ class Workspace:
         self.root = Path(root).resolve()
         CONFIG.write_text(json.dumps({"workspace": str(self.root)}, ensure_ascii=False), encoding="utf-8")
 
-    def count(self, path):
+    def summary(self, path):
         modified = path.stat().st_mtime
         cached = self.counts.get(path)
         if cached and cached[0] == modified:
-            return cached[1]
+            return cached[1:]
         try:
             with fitz.open(path) as doc:
-                marks = sum(len(marker_xrefs(doc, page)) for page in doc)
+                marks = read_marks(doc)
         except (fitz.FileDataError, RuntimeError):
-            marks = 0  # damaged file: still listed; opening it reports the problem
-        self.counts[path] = (modified, marks)
-        return marks
+            marks = []  # damaged file: still listed; opening it reports the problem
+        grade = next((mark["text"] for mark in marks if mark.get("grade")), None)
+        self.counts[path] = (modified, len(marks), grade)
+        return len(marks), grade
 
     def tree(self):
         """Every PDF under the workspace, grouped by folder. Dot folders such as .orig are skipped."""
@@ -212,16 +216,11 @@ class Workspace:
                 if name.lower().endswith(".pdf"):
                     path = Path(folder) / name
                     rel = path.relative_to(self.root)
+                    marks, grade = self.summary(path)
                     groups.setdefault(rel.parent.as_posix(), []).append(
-                        {"file": rel.as_posix(), "name": name, "marks": self.count(path)})
+                        {"file": rel.as_posix(), "name": name, "marks": marks, "grade": grade})
         return {"root": str(self.root),
                 "groups": [{"dir": d, "files": f} for d, f in groups.items()]}
-
-    def folder_of(self, rel):
-        """The folder of an open file, or the workspace itself when nothing is open."""
-        if not self.root:
-            raise ValueError("no workspace chosen")
-        return self.resolve(rel).parent if rel else self.root
 
     def reference_place(self):
         """Reference answers belong to the whole workspace, so one upload serves every submission."""
@@ -246,21 +245,20 @@ class Workspace:
     def remove_reference(self, name):
         self.reference(name).unlink()
 
-    def guidance(self, rel):
-        """The teacher's marking rules: the nearest ones above the file win."""
-        folder = self.folder_of(rel)
-        while True:
-            path = folder / ".marker" / "guidance.md"
-            if path.is_file():
-                return path.read_text(encoding="utf-8")
-            if folder == self.root:
-                return ""
-            folder = folder.parent
+    def guidance_path(self):
+        if not self.root:
+            raise ValueError("no workspace chosen")
+        return self.root / ".marker" / "guidance.md"
 
-    def save_guidance(self, rel, text):
-        place = self.folder_of(rel) / ".marker"
-        place.mkdir(exist_ok=True)
-        (place / "guidance.md").write_text(text, encoding="utf-8")
+    def guidance(self):
+        """The teacher's marking rules and grade scale, one set for the whole workspace."""
+        path = self.guidance_path()
+        return path.read_text(encoding="utf-8") if path.is_file() else ""
+
+    def save_guidance(self, text):
+        path = self.guidance_path()
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(text, encoding="utf-8")
 
     def reference(self, name):
         for path in self.references():
@@ -365,7 +363,7 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == "/api/reference":
                 self.reply([p.name for p in self.workspace.references()])
             elif url.path == "/api/guidance":
-                self.reply({"text": self.workspace.guidance(args.get("file"))})
+                self.reply({"text": self.workspace.guidance()})
             elif url.path == "/api/reference/view":
                 self.reply(reference_view(self.workspace.reference(args["name"])))
             elif url.path == "/api/reference/page":
@@ -414,10 +412,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.workspace.remove_reference(body["name"])
                 self.reply({"ok": True})
             elif self.path == "/api/claude/mark":
-                start_marking(self.workspace, self.jobs, body["file"], self.workspace.guidance(body["file"]).strip())
+                start_marking(self.workspace, self.jobs, body["file"], self.workspace.guidance().strip())
                 self.reply({"ok": True})
             elif self.path == "/api/guidance":
-                self.workspace.save_guidance(body.get("file"), str(body["text"]))
+                self.workspace.save_guidance(str(body["text"]))
                 self.reply({"ok": True})
             elif self.path == "/api/claude/reject":
                 self.jobs.reject(self.workspace.resolve(body["file"]), [str(item) for item in body["ids"]])

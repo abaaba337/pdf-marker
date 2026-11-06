@@ -1,6 +1,7 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { useSyncExternalStore } from "react";
 import {
+  GRADE_WIDTH,
   LEADER_WIDTH,
   LINE_WIDTH,
   type Mark,
@@ -12,6 +13,7 @@ import {
   type NoteMark,
   STAMP_SIZE,
   STAMP_WIDTH,
+  gradeStrokes,
   type Tool,
   leaderEnds,
   notePlace,
@@ -22,6 +24,7 @@ export interface FileRow {
   file: string;
   name: string;
   marks: number;
+  grade: string | null;
 }
 
 export interface Group {
@@ -30,7 +33,7 @@ export interface Group {
 }
 
 export interface ClaudeNote {
-  kind: "note" | "thought" | "read";
+  kind: "note" | "thought" | "read" | "run" | "output";
   text: string;
 }
 
@@ -165,6 +168,7 @@ let noteBefore: Mark[] = [];
 
 function editNote(id: string, before: Mark[]) {
   const note = markById(id) as NoteMark;
+  if (note.grade) return;  // a grade changes through the grade bar
   noteBefore = before;
   set({ editing: id, selected: id, draft: note.text });
 }
@@ -410,6 +414,7 @@ export async function save() {
   const marks = state.marks.map((mark) => {
     if (mark.type !== "text") return mark;
     const { leader, ...note } = mark;
+    if (note.grade) return { ...note, ink: gradeStrokes(note), width: GRADE_WIDTH };
     const anchor = markById(note.anchor);
     return anchor
       ? { ...note, leader: { ...leaderEnds(mark, anchor), color: anchor.color, width: LEADER_WIDTH } }
@@ -474,7 +479,7 @@ function fitZoom(main: HTMLElement, widest: number) {
 }
 
 /* After a side column changes the space, once the layout has settled. */
-function refit() {
+export function refit() {
   requestAnimationFrame(() => {
     const main = document.getElementById("main");
     if (main && state.pages.length) set({ zoom: fitZoom(main, Math.max(...state.pages.map((p) => p.w))) });
@@ -489,8 +494,6 @@ export function togglePanel() {
 export function setInstruction(instruction: string) {
   set({ instruction });
 }
-
-const fileQuery = () => (state.file ? "file=" + encodeURIComponent(state.file) : "");
 
 export async function loadReferences() {
   try {
@@ -565,7 +568,7 @@ function followPage(page: number) {
 
 export async function loadGuidance() {
   try {
-    const { text } = await api<{ text: string }>("/api/guidance?" + fileQuery());
+    const { text } = await api<{ text: string }>("/api/guidance");
     set({ instruction: text });
   } catch {
     set({ instruction: "" });
@@ -573,7 +576,7 @@ export async function loadGuidance() {
 }
 
 export async function saveGuidance() {
-  await api("/api/guidance", post({ file: state.file, text: state.instruction }));
+  await api("/api/guidance", post({ text: state.instruction }));
 }
 
 export async function startClaude() {
@@ -605,11 +608,41 @@ function standing({ marks, rejected }: ClaudeResult) {
 }
 
 const isRow = (mark: Mark) => !(mark.type === "text" && mark.anchor);
+const isGrade = (mark: Mark) => mark.type === "text" && Boolean(mark.grade);
+
+/* One grade per submission: picking another replaces it, and picking the same one clears it. */
+export function setGrade(letter: string) {
+  const current = state.marks.find(isGrade) as NoteMark | undefined;
+  const others = state.marks.filter((mark) => !isGrade(mark));
+  if (current?.text === letter) {
+    commit(others);
+    rememberRejected([current.id]);
+    return;
+  }
+  const page = state.pages[0];
+  const stamp: NoteMark = current
+    ? { ...current, text: letter, fromClaude: false }
+    : {
+        id: crypto.randomUUID(),
+        type: "text",
+        page: 0,
+        color: "#d92b2b",
+        x: page.w - 86,
+        y: 14,
+        w: 70,
+        h: 52,
+        size: 24,
+        text: letter,
+        grade: true,
+      };
+  commit([...others, stamp]);
+}
 
 /* Claude's marks count from the moment they arrive: they are ordinary marks, and go if deleted. */
 function mergeClaude() {
+  const graded = state.marks.some(isGrade);  // Claude never overrides a grade already given
   const added = standing(state.claude)
-    .filter((mark) => !markById(mark.id))
+    .filter((mark) => !markById(mark.id) && !(graded && isGrade(mark)))
     .map((mark) => ({ ...mark, fromClaude: true }));
   if (added.length) {
     set({ marks: [...state.marks, ...added], dirty: true, status: { text: "有未保存的修改", error: false } });

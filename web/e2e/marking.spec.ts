@@ -221,9 +221,11 @@ test("Claude's marks arrive as ordinary marks, edit like them, and can be delete
   await expect(marks(page).first()).toBeVisible();
   await expect(page.locator(".thinking", { hasText: "正在看第 1 处" })).toBeVisible();
   await expect(page.locator(".thinking", { hasText: "读取 submission.pdf" })).toBeVisible();
+  await expect(page.locator(".thinking .run").first()).toContainText("运行参考答案");
+  await expect(page.locator(".thinking .output").first()).toContainText("answer");
   await expect(page.getByRole("button", { name: "批改中，点此取消" })).toBeVisible();
 
-  await expect(page.getByText("Reference seen.")).toBeVisible();
+  await expect(page.getByText("Output seen.")).toBeVisible();  // Claude got what the answer really prints
   await expect(page.getByRole("button", { name: "重新批改" })).toBeVisible();
   await expect(page.locator(".page")).toHaveCount(2);  // one copy of the work, no second column
   await expect(marks(page)).toHaveCount(8);  // a kind that is not on the toolbar is dropped
@@ -276,6 +278,40 @@ test("Claude's marks arrive as ordinary marks, edit like them, and can be delete
   await page.getByRole("button", { name: "全部删除" }).click();
   await expect(marks(page)).toHaveCount(0);
   await expect(page.getByRole("button", { name: "全部删除" })).toBeDisabled();
+});
+
+test("a submission gets one grade, stamped on it and shown in the list", async ({ page }) => {
+  await openFile(page, "nested.pdf", "Sheet 2", "Sheet 2/deep");
+  const bar = page.locator("#grades");
+  const stamp = page.locator(".gradeStamp");
+  await expect(bar.getByRole("button")).toHaveText(["A+", "A", "A-", "B+", "B", "B-"]);
+
+  await bar.getByRole("button", { name: "A-" }).click();
+  await expect(stamp).toHaveAttribute("data-letter", "A-");
+  await bar.getByRole("button", { name: "B+" }).click();
+  await expect(stamp).toHaveCount(1);  // replaced, not added
+  await expect(stamp).toHaveAttribute("data-letter", "B+");
+  await expect(bar.locator("button.on")).toHaveText("B+");
+
+  const box = (await stamp.boundingBox())!;  // it drags, and a double click doesn't turn it into free text
+  await drag(page, [box.x + 20, box.y + 20], [box.x - 40, box.y + 40]);
+  const moved = (await stamp.boundingBox())!;
+  expect(Math.round(box.x - moved.x)).toBe(60);
+  await page.mouse.dblclick(moved.x + 20, moved.y + 20);
+  await expect(editor(page)).toHaveCount(0);
+  await bar.getByRole("button", { name: "A", exact: true }).click();
+  expect(Math.round((await stamp.boundingBox())!.x)).toBe(Math.round(moved.x));  // keeps its place
+  await saved(page);
+
+  await expect(page.locator(".file.on .gradeTag")).toHaveText("A");
+  await openFile(page, "nested.pdf", "Sheet 2", "Sheet 2/deep");
+  await expect(stamp).toHaveAttribute("data-letter", "A");
+  await expect(bar.locator("button.on")).toHaveText("A");
+
+  await bar.getByRole("button", { name: "A", exact: true }).click();  // the same grade again clears it
+  await expect(stamp).toHaveCount(0);
+  await saved(page);
+  await expect(page.locator(".file.on .gradeTag")).toHaveCount(0);
 });
 
 test("marking rules are kept for the folder and reach Claude", async ({ page }) => {
@@ -351,6 +387,45 @@ test("reference answers open read-only in their own column", async ({ page }) =>
   await page.getByRole("button", { name: "关闭参考答案" }).click();
   await expect(pane).toHaveCount(0);
   await expect(page.locator(".page[data-n=\"0\"]")).toBeVisible();
+});
+
+test("the reference sits beside the work when there is room, and below it when there isn't", async ({ page }) => {
+  await page.setViewportSize({ width: 1800, height: 900 });
+  await openFile(page, "nested.pdf", "Sheet 2", "Sheet 2/deep");
+  await page.locator("#referenceInput").setInputFiles({
+    name: "layout.py",
+    mimeType: "text/plain",
+    buffer: Buffer.from("x = 1\n"),
+  });
+  await page.locator(".referenceName", { hasText: "layout.py" }).click();
+  const pane = page.locator("#reference");
+  const work = page.locator("main");
+  await expect(pane).toBeVisible();
+  const box = async (locator: typeof pane) => (await locator.boundingBox())!;
+
+  expect((await box(pane)).x).toBeGreaterThanOrEqual((await box(work)).x + (await box(work)).width - 1);
+
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await expect(page.locator(".app.stacked")).toBeVisible();
+  await expect.poll(async () => (await box(pane)).y).toBeGreaterThan(400);
+  const below = await box(pane);
+  const above = await box(work);
+  expect(below.y).toBeGreaterThanOrEqual(above.y + above.height - 1);
+  expect(Math.round(below.width)).toBe(Math.round(above.width));
+  expect(below.x + below.width).toBeLessThanOrEqual(1100);
+
+  // the toolbar's controls never land on each other
+  const history = await box(page.locator(".history"));
+  expect((await box(page.locator("#save"))).x).toBeGreaterThanOrEqual(history.x + history.width);
+
+  // the height drags, and the page never spills out
+  const edge = (await box(page.locator("#reference .resizer"))).y + 4;
+  await drag(page, [below.x + 200, edge], [below.x + 200, edge - 100]);
+  expect(Math.round((await box(pane)).height)).toBe(Math.round(below.height) + 100);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+
+  await page.setViewportSize({ width: 1800, height: 900 });
+  await expect(page.locator(".app.stacked")).toHaveCount(0);
 });
 
 test("the API refuses other sites", async ({ request }) => {
