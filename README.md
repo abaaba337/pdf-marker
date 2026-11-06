@@ -1,5 +1,7 @@
 # PDF Marker
 
+English | [中文](README.zh-CN.md)
+
 Mark up a folder of PDFs in a local web page: ticks, crosses, highlights, comments, circles and lines. Marks are saved into the original PDF as standard annotations, so students see them in any PDF viewer, and they stay editable when you reopen the file here.
 
 ![PDF Marker with a marked page, a grade, a reference answer and a conversation with Claude](docs/screenshot.png)

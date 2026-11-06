@@ -30,6 +30,8 @@ Run the app with `start.cmd`, or `dev.cmd` for hot reload at http://127.0.0.1:30
 
 ## Before committing
 
+`README.zh-CN.md` mirrors `README.md`: change both together.
+
 Only the owner pushes to `main`. Anyone else goes through a pull request the owner approves: a GitHub ruleset enforces this, and `.github/CODEOWNERS` names whose approval counts.
 
 Run `python scripts/check.py`, which covers the leak guard, server tests, type check, build and browser tests. Enable the guard once per clone with `git config core.hooksPath .githooks`.
