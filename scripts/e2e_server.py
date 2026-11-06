@@ -1,9 +1,12 @@
 """Serve the built page on a throwaway workspace of generated PDFs, for the browser tests."""
+import os
 import sys
 import tempfile
 from pathlib import Path
 
 import fitz
+
+os.environ["PDF_MARKER_ANSWERS"] = tempfile.mkdtemp(prefix="pdf-marker-e2e-answers-")  # every test run starts clean
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -17,6 +20,7 @@ FILES = [
     "Sheet 1/drag.pdf",
     "Sheet 1/reopen.pdf",
     "Sheet 1/claude.pdf",
+    "Sheet 1/switch.pdf",
     "Sheet 2/deep/nested.pdf",
     "Sheet 10/later.pdf",
     "rotated.pdf",

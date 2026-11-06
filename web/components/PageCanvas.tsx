@@ -121,7 +121,7 @@ function NoteEditor({ note, draft }: { note: NoteMark; draft: string }) {
         className="note"
         value={draft}
         placeholder="回车确认，Shift+回车换行"
-        style={{ fontSize: note.size, color: note.color }}
+        style={{ fontSize: note.size, color: note.color, minHeight: note.boxHeight }}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={finishEditing}
         onPointerDown={(e) => e.stopPropagation()}
@@ -140,9 +140,12 @@ function NoteEditor({ note, draft }: { note: NoteMark; draft: string }) {
 
 function NoteText({ note }: { note: NoteMark }) {
   const box = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => setNoteHeight(note.id, Math.ceil(box.current!.offsetHeight)), [note.id, note.text, note.w, note.size]);
+  useLayoutEffect(
+    () => setNoteHeight(note.id, Math.ceil(box.current!.offsetHeight)),
+    [note.id, note.text, note.w, note.size, note.boxHeight],
+  );
   return (
-    <div ref={box} className="note" style={{ fontSize: note.size, color: note.color }}>
+    <div ref={box} className="note" style={{ fontSize: note.size, color: note.color, minHeight: note.boxHeight }}>
       {note.text}
     </div>
   );
@@ -186,11 +189,12 @@ function Handles({ mark, zoom }: { mark: Mark; zoom: number }) {
   );
 }
 
-/* On the top right corner of the mark, or of its note. Fixed size on screen, whatever the zoom. */
+/* Just outside the top right corner of the mark or its note, clear of the resize handle.
+   Fixed size on screen, whatever the zoom. */
 function DeleteButton({ mark, note, zoom }: { mark: Mark; note?: Mark; zoom: number }) {
   const box = bounds(note ?? mark);
   return (
-    <foreignObject x={box.x + box.w - 9 / zoom} y={box.y - 9 / zoom} width={18 / zoom} height={18 / zoom}>
+    <foreignObject x={box.x + box.w + 6 / zoom} y={box.y - 22 / zoom} width={18 / zoom} height={18 / zoom}>
       <div
         className="claudeDelete"
         style={{ transform: `scale(${1 / zoom})` }}
@@ -216,8 +220,12 @@ export function PageCanvas({ n, page, state }: Props) {
   const current = here.find((m) => m.id === selected);
   return (
     <div className="page" data-n={n} style={{ width: page.w * zoom, height: page.h * zoom }}>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img alt="" loading="lazy" src={`/api/page?file=${encodeURIComponent(file!)}&n=${n}&w=1800`} />
+      {/* a background, not an <img>: image translators would otherwise rewrite the student's work */}
+      <div
+        className="scan notranslate"
+        translate="no"
+        style={{ backgroundImage: `url("/api/page?file=${encodeURIComponent(file!)}&n=${n}&w=1800")` }}
+      />
       <svg
         viewBox={`0 0 ${page.w} ${page.h}`}
         className={tool === "select" ? "" : tool === "text" ? "text" : "draw"}

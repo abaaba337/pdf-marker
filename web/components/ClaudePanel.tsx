@@ -1,6 +1,6 @@
-import { useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { Mark } from "@/lib/marks";
-import { PANEL, Resizer } from "./Resizer";
+import { CHAT_HEIGHT, PANEL, Resizer, useWidth } from "./Resizer";
 import {
   type ClaudeNote,
   deleteAllClaude,
@@ -8,6 +8,7 @@ import {
   cancelClaude,
   restoreMark,
   saveGuidance,
+  sendChat,
   setInstruction,
   startClaude,
   useStore,
@@ -24,7 +25,36 @@ const KIND_LABEL: Record<Mark["type"], string> = {
   text: "批注",
 };
 
-function Thinking({ log, draft }: { log: ClaudeNote[]; draft: string }) {
+const FRAMES = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
+const ACTIVITY: Partial<Record<ClaudeNote["kind"], string>> = { read: "阅读中", run: "运行答案中" };
+
+/* Marking takes a minute or more, so show that it is alive and what it is doing. */
+function Working({ log, elapsed = 0 }: { log: ClaudeNote[]; elapsed?: number }) {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setTick((value) => value + 1), 120);
+    return () => clearInterval(timer);
+  }, []);
+  const activity = ACTIVITY[log.at(-1)?.kind ?? "read"] ?? "批改中";
+  return (
+    <p className="working" role="status">
+      <span className="spark" aria-hidden="true">
+        {FRAMES[tick % FRAMES.length]}
+      </span>
+      {activity}…<span className="elapsed">{elapsed} 秒</span>
+    </p>
+  );
+}
+
+function Notes({ log }: { log: ClaudeNote[] }) {
+  return log.map((note, index) => (
+    <p key={index} className={note.kind === "note" ? "step" : note.kind}>
+      {note.text}
+    </p>
+  ));
+}
+
+function Thinking({ log, draft, running, elapsed }: { log: ClaudeNote[]; draft: string; running: boolean; elapsed?: number }) {
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (box.current) box.current.scrollTop = box.current.scrollHeight;
@@ -33,13 +63,10 @@ function Thinking({ log, draft }: { log: ClaudeNote[]; draft: string }) {
     <section>
       <h3>思路</h3>
       <div className="thinking" ref={box}>
-        {log.map((note, index) => (
-          <p key={index} className={note.kind === "note" ? "step" : note.kind}>
-            {note.text}
-          </p>
-        ))}
+        <Notes log={log} />
         {draft && <p className="step">{draft}</p>}
       </div>
+      {running && <Working log={log} elapsed={elapsed} />}
     </section>
   );
 }
@@ -48,6 +75,91 @@ interface ProposalProps {
   mark: Mark;
   note?: Mark;
   rejected: boolean;
+}
+
+/* A block of its own under the panel, so the conversation stays in reach while the list above changes. */
+function Chat({ state }: { state: State }) {
+  const [draft, setDraft] = useState("");
+  const { width: height, setWidth: setHeight } = useWidth(CHAT_HEIGHT);
+  const log = useRef<HTMLDivElement>(null);
+  const block = useRef<HTMLElement>(null);
+  const { chat, state: progress, turn = [], draft: partial } = state.claude;
+  const running = progress === "running";
+  const replying = running && chat.at(-1)?.role === "teacher";
+  useEffect(() => {
+    if (log.current) log.current.scrollTop = log.current.scrollHeight;
+  }, [chat.length, replying, turn.length, partial]);
+  const send = () => {
+    if (running || !draft.trim()) return;
+    void sendChat(draft);
+    setDraft("");
+  };
+  return (
+    <section id="chat" ref={block} style={{ height: height || "50%" }}>
+      <Resizer
+        width={() => block.current?.offsetHeight ?? 0}
+        fallback={CHAT_HEIGHT.fallback}
+        onResize={setHeight}
+        side="top"
+      />
+      <h3>和 Claude 说</h3>
+      <div className="chatLog" ref={log}>
+        {chat.map((message, index) => (
+          <Fragment key={index}>
+            {message.log && message.log.length > 0 && (
+              <details className="steps">
+                <summary>思路 · {message.log.length} 步</summary>
+                <div className="thinkingSteps">
+                  <Notes log={message.log} />
+                </div>
+              </details>
+            )}
+            <p className={"turn " + message.role}>{message.text}</p>
+          </Fragment>
+        ))}
+        {replying && (
+          <div className="thinkingSteps live">
+            <Notes log={turn} />
+            {partial && <p className="step">{partial}</p>}
+          </div>
+        )}
+        {!chat.length && <p className="chatHint">想改什么直接说，Claude 会在稿子上改。</p>}
+        {replying && <Working log={turn} elapsed={state.claude.elapsed} />}
+      </div>
+      <div className="chatInput">
+        <textarea
+          value={draft}
+          placeholder="比如：第 2 题别扣分"
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              send();
+            }
+          }}
+        />
+        {running ? (
+          <button
+            aria-label="停止"
+            title="停止"
+            disabled={state.cancelling}
+            onClick={() => void cancelClaude()}
+          >
+            <svg viewBox="0 0 24 24">
+              <rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" stroke="none" />
+            </svg>
+          </button>
+        ) : (
+          <button aria-label="发送" title="发送" disabled={!draft.trim()} onClick={send}>
+            <svg viewBox="0 0 24 24">
+              <path d="M12 19V5M6 11l6-6 6 6" />
+            </svg>
+          </button>
+        )}
+      </div>
+    </section>
+  );
 }
 
 function Proposal({ mark, note, rejected }: ProposalProps) {
@@ -111,6 +223,7 @@ interface PanelProps {
 export function ClaudePanel({ state, width, onResize }: PanelProps) {
   const { cancelling, claude, file, instruction } = state;
   const running = claude.state === "running";
+  const talking = running && claude.chat.at(-1)?.role === "teacher";
   return (
     <aside id="panel">
       <Resizer width={width} fallback={PANEL.fallback} onResize={onResize} side="left" />
@@ -119,6 +232,7 @@ export function ClaudePanel({ state, width, onResize }: PanelProps) {
       <section>
         <h3>批改规范</h3>
         <textarea
+          id="rules"
           value={instruction}
           placeholder="写下批改要求和等第标准，这个工作区的每一份都会用"
           onChange={(event) => setInstruction(event.target.value)}
@@ -135,9 +249,10 @@ export function ClaudePanel({ state, width, onResize }: PanelProps) {
         )}
         {claude.state === "failed" && <p className="failed">{claude.error}</p>}
       </section>
-      {(running || claude.log.length > 0) && <Thinking log={claude.log} draft={claude.draft} />}
+      {((running && !talking) || claude.log.length > 0) && <Thinking log={claude.log} draft={talking ? "" : claude.draft} running={running && !talking} elapsed={claude.elapsed} />}
       {(claude.state === "done" || claude.marks.length > 0) && <Result state={state} />}
       </div>
+      {file && <Chat state={state} />}
     </aside>
   );
 }

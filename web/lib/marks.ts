@@ -92,6 +92,7 @@ export interface NoteMark extends Base, Box {
   text: string;
   anchor?: string;
   leader?: Leader;
+  boxHeight?: number;  // set by dragging: the box never gets shorter than its text
   grade?: boolean;  // the submission's grade, stamped on the first page
   ink?: [number, number][][];  // its strokes, worked out when saving
 }
@@ -145,6 +146,8 @@ export function leaderEnds(note: NoteMark, anchor: Mark): Ends {
     if (anchor.type === "circle") {
       const angle = Math.atan2((midY - cy) / ry, (midX - cx) / rx);
       from = { x: cx + rx * Math.cos(angle), y: cy + ry * Math.sin(angle) };
+    } else if (anchor.type === "tick") {
+      from = { x: anchor.x + 0.35 * anchor.w, y: anchor.y + anchor.h };  // the point of the tick
     } else {
       from = { x: cx, y: cy };
     }

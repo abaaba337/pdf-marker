@@ -55,7 +55,7 @@ export function ReferencePane({ reference, size, stacked, onResize }: Props) {
           收起
         </button>
       </header>
-      <div className="referenceBody">
+      <div className="referenceBody notranslate" translate="no">
         <View name={reference.name} view={reference.view} />
       </div>
     </section>

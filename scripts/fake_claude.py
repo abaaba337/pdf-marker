@@ -30,8 +30,33 @@ def tool(name, **arguments):
     send({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name, "input": arguments}]}})
 
 
+def conversation():
+    """Stands in for a teacher's request: removes the first tick, rewrites a comment, adds a mark."""
+    marks = json.loads(Path("marks.json").read_text(encoding="utf-8"))
+    lines = json.loads(Path("lines.json").read_text(encoding="utf-8"))
+    write("看看要改什么\n")
+    tool("Read", file_path="C:/somewhere/marks.json")
+    time.sleep(1.2)
+    tick = next(mark for mark in marks if mark["type"] == "tick")
+    note = next(mark for mark in marks if mark.get("text") == "Look here.")
+    tool("mcp__marker__remove_mark", id=tick["id"])
+    tool("mcp__marker__change_comment", id=note["id"], comment="Softer wording.")
+    tool("mcp__marker__grade", letter="B+")
+    tool("mcp__marker__comment", page=0, line=lines[11]["line"], comment="Added on request.")
+    tool("mcp__marker__tick", page=0, line=lines[11]["line"], comment="A tick with a comment.")
+    time.sleep(0.3)
+    write("REPLY 已按要求修改。")
+    send({"type": "stream_event", "event": {"type": "content_block_stop"}})
+    send({"type": "result", "is_error": False, "result": "done"})
+
+
 def main():
-    assert sys.stdin.read()
+    request = sys.stdin.read()
+    assert request
+    if Path("marks.json").is_file():
+        assert "teacher:" in request
+        conversation()
+        return
     for flag in ("--strict-mcp-config", "--disable-slash-commands", "--setting-sources"):
         assert flag in sys.argv, flag
     lines = json.loads(Path("lines.json").read_text(encoding="utf-8"))
@@ -40,7 +65,10 @@ def main():
     delta("thinking_delta", "thinking", "先看整体结构\n")
     tool("Read", file_path="C:/somewhere/submission.pdf")
     ran = Path("reference_1.py").is_file()
-    if ran:  # the same tool the real agent gets, on the same file
+    if Path("reference_1.output.txt").is_file():  # already run: read it, as the real agent is told to
+        assert "It has already been run" in system
+        tool("Read", file_path="C:/somewhere/reference_1.output.txt")
+    elif ran:  # the same tool the real agent gets, on the same file
         output = marker_tools.run_answer(".", "reference_1.py")
         send({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "run1",
               "name": "mcp__marker__run_answer", "input": {"file": "reference_1.py"}}]}})

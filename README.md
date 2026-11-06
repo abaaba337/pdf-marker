@@ -36,6 +36,7 @@ On Windows, double-click `start.cmd`, which builds the page the first time. Clic
 - **Comment boxes.** `Enter` confirms and `Shift+Enter` starts a new line. Clicking elsewhere confirms too and carries on with the current tool. A box left empty is removed.
 - **Linked comments.** A thin line joins the box to its mark, as in Word, and follows when either one moves. Deleting a mark deletes its comment.
 - **Moving comments.** Drag a box under any tool. While typing, drag the dark bar on top of it.
+- **Zoom.** `Ctrl` with the wheel, or a pinch, zooms the work around the pointer, and `Ctrl` with `+`, `-` or `0` steps it or fits it to the width. The rest of the page keeps its size.
 - **Other keys.** `Ctrl+S` saves, `Ctrl+Z` and `Ctrl+Y` undo and redo, `Delete` removes the selection, `Esc` returns to Select.
 - **Switching files** saves the current one first.
 - **Side panels.** Folders open and close like a file explorer. Drag the inner edge of either side panel to resize it, and double-click the edge to reset it.
@@ -46,14 +47,15 @@ The panel on the right opens by default, and the **Claude** button hides it. It 
 
 1. **Reference answers.** They sit under the workspace in the left panel. Upload the correct answers with **+ 上传**: PDF, Word (docx), HTML or common code files. Clicking a name opens it read-only beside the work, or below it on a narrow screen, and it stays open as you move between submissions. They belong to the whole workspace, so one upload serves every submission. They are stored in a hidden `.marker` folder.
 2. **Marking rules.** Write what a good answer needs and how you want comments written. Say what each grade means too. The rules are kept once for the whole workspace.
-3. **Mark.** Press the button. Claude marks the same page you are working on, with the same seven tools, and its reasoning appears in the panel.
+3. **Mark.** Press the button. Claude marks the same page you are working on, with the same seven tools, and its reasoning appears in the panel. Each comment points at the exact words it is about, circled or underlined, and is written to the student: a comment that mentions the reference answer or the teacher is refused, and Claude rewrites it.
 4. **Keep what you want.** Claude's marks are ordinary marks from the moment they appear, so saving puts them in the PDF. Drag, resize or reword them like your own. Claude also proposes a grade, unless you have already given one, and the grade bar changes it. To drop one, press the × on its top right corner: it stays gone, and the panel can restore it. Marking again replaces Claude's last marks.
+5. **Talk to it.** Ask for changes in the panel, such as "don't take marks off question 2" or "make this comment gentler". Claude changes only what you ask, on the same page, and each change can be undone.
 
 Pressing the button sends the PDF and its reference answers to Anthropic through Claude Code, so check that your institution allows this for the work you are marking. The copy sent is named `submission.pdf`, so the file name stays behind, and it doesn't include your marks. A name written inside the PDF is still sent.
 
-The agent is shut in. It takes only `effortLevel` from your Claude Code settings, and loads no hooks, plugins, skills or MCP servers. Its only tools are `Read`, which is confined to a temporary folder, the seven marking tools in `marker_tools.py`, and `run_answer`. It is also told to ignore instructions written in the submission.
+The agent is shut in. It takes only `effortLevel` from your Claude Code settings, and loads no hooks, plugins, skills or MCP servers. Its only tools are `Read`, which is confined to a temporary folder, the marking tools in `marker_tools.py`, the tools that edit its marks, and `run_answer`. It is also told to ignore instructions written in the submission.
 
-When a reference answer is a `.py` file, Claude runs it itself with `run_answer`, on your computer, and compares what it really prints line by line with the output printed in the submission. When they differ, it reads the student's code to find the line responsible. The tool takes only a reference file's name, so student code is never run. Only upload reference code you trust.
+When a reference answer is a `.py` file, Claude runs it itself with `run_answer`, on your computer, once per version of the file, and compares what it really prints line by line with the output printed in the submission. When they differ, it reads the student's code to find the line responsible. The tool takes only a reference file's name, so student code is never run. Only upload reference code you trust.
 
 ## Saving
 

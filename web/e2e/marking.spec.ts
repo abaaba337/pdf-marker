@@ -13,7 +13,7 @@ async function openFolders(page: Page, ...names: string[]) {
 
 async function openFile(page: Page, name: string, ...folders: string[]) {
   await page.goto("/");
-  await expect(page.locator("#empty h1")).toBeVisible();
+  await expect(page.locator("summary").first()).toBeVisible();
   await openFolders(page, ...folders);
   await page.locator(".file", { hasText: name }).click();
   await expect(page.locator('.page[data-n="1"]')).toBeVisible();
@@ -75,7 +75,7 @@ test("both side panels resize, remember their width and reset", async ({ page })
     const width = async () => Math.round((await page.locator(panel).boundingBox())!.width);
     await expect.poll(width).toBe(normal);
     const edge = async () => {
-      const box = (await page.locator(`${panel} .resizer`).boundingBox())!;
+      const box = (await page.locator(`${panel} > .resizer`).boundingBox())!;
       return box.x + 4;
     };
     const x = await edge();
@@ -144,6 +144,7 @@ test("a note drags while typing and under a drawing tool", async ({ page }) => {
   await drag(page, [before.x + 30, before.y + 6], [before.x + 90, before.y + 46]);
   const after = (await notes(page).boundingBox())!;
   expect(Math.round(after.x - before.x)).toBe(60);
+  expect(await page.evaluate(() => getSelection()?.toString())).toBe("");  // dragging selects no text
   expect(Math.round(after.y - before.y)).toBe(40);
   await expect(marks(page)).toHaveCount(count);
 
@@ -224,20 +225,25 @@ test("Claude's marks arrive as ordinary marks, edit like them, and can be delete
   await expect(page.locator(".thinking .run").first()).toContainText("运行参考答案");
   await expect(page.locator(".thinking .output").first()).toContainText("answer");
   await expect(page.getByRole("button", { name: "批改中，点此取消" })).toBeVisible();
+  const spark = page.locator(".working .spark");  // it visibly moves, so nobody thinks it has hung
+  const first = await spark.textContent();
+  await expect.poll(() => spark.textContent()).not.toBe(first);
 
   await expect(page.getByText("Output seen.")).toBeVisible();  // Claude got what the answer really prints
   await expect(page.getByRole("button", { name: "重新批改" })).toBeVisible();
+  await expect(page.locator(".working")).toHaveCount(0);
   await expect(page.locator(".page")).toHaveCount(2);  // one copy of the work, no second column
   await expect(marks(page)).toHaveCount(8);  // a kind that is not on the toolbar is dropped
   await expect(page.locator("polygon.head")).toHaveCount(1);
   await expect(remove).toHaveCount(5);  // one per mark, with its note
 
-  // every delete button sits on the top right corner of its mark or note
+  // every delete button sits just outside the top right corner, clear of the resize handle
   const note = page.locator(".page .note", { hasText: "Check this sign." });
   const corner = (await note.boundingBox())!;
   const button = (await remove.nth(1).boundingBox())!;
-  expect(Math.abs(button.x + button.width / 2 - (corner.x + corner.width))).toBeLessThan(4);
-  expect(Math.abs(button.y + button.height / 2 - corner.y)).toBeLessThan(4);
+  expect(button.x).toBeGreaterThanOrEqual(corner.x + corner.width + 4);
+  expect(button.y + button.height).toBeLessThanOrEqual(corner.y);
+  expect(button.x - (corner.x + corner.width)).toBeLessThan(12);
 
   // Claude's marks drag and edit like any other
   await drag(page, [corner.x + 30, corner.y + 6], [corner.x + 90, corner.y + 12]);
@@ -274,9 +280,84 @@ test("Claude's marks arrive as ordinary marks, edit like them, and can be delete
   await expect(page.getByRole("button", { name: "批改中，点此取消" })).toBeVisible();
   await expect(page.getByRole("button", { name: "重新批改" })).toBeVisible({ timeout: 10000 });
   await expect(marks(page)).toHaveCount(8);
+  await expect(page.locator(".thinking", { hasText: "读取 reference_1.output.txt" })).toBeVisible();
+  await expect(page.locator(".thinking .run")).toHaveCount(0);  // the answer hasn't changed, so it isn't run again
+
+  // the teacher asks for changes in words, and Claude makes them on the page
+  const box = page.locator("#chat textarea");
+  await box.fill("把勾去掉，语气软一点");
+  await box.press("Enter");
+  await expect(page.locator(".turn.teacher")).toHaveText("把勾去掉，语气软一点");
+  // like a chat with an agent: the steps run inside the conversation, not in the marking notes above
+  await expect(page.locator("#chat .thinkingSteps.live", { hasText: "看看要改什么" })).toBeVisible();
+  await expect(page.locator("#chat .working")).toBeVisible();
+  await expect(page.locator(".thinking", { hasText: "看看要改什么" })).toHaveCount(0);
+  await expect(page.locator(".turn.claude")).toHaveText("已按要求修改。");
+  const steps = page.locator("#chat details.steps");  // finished steps fold away, and open again
+  await expect(steps.locator("summary")).toContainText("思路 · 2 步");
+  await expect(steps.locator(".thinkingSteps")).toBeHidden();
+  await steps.locator("summary").click();
+  await expect(steps.locator(".thinkingSteps")).toContainText("读取 marks.json");
+  await steps.locator("summary").click();
+  await expect(page.locator(".page .note", { hasText: "Softer wording." })).toBeVisible();
+  await expect(page.locator(".page .note", { hasText: "Look here." })).toHaveCount(0);
+  await expect(page.locator(".page .note", { hasText: "Added on request." })).toBeVisible();
+  await expect(page.locator(".gradeStamp")).toHaveAttribute("data-letter", "B+");
+  await expect(marks(page)).toHaveCount(12);  // one tick gone; two comments with their marks, and a grade, added
+
+  // a tick's line leaves from its point
+  const fromPoint = await page.evaluate(() => {
+    const points = [...document.querySelectorAll("[data-id] path")].map((path) => {
+      const found = /^M\S+ \S+L(\S+) (\S+)L\S+ \S+$/.exec(path.getAttribute("d") ?? "");
+      return found ? `${Number(found[1]).toFixed(2)},${Number(found[2]).toFixed(2)}` : "";
+    });
+    return [...document.querySelectorAll("[data-leader]")].some((line) => {
+      const start = `${Number(line.getAttribute("x1")).toFixed(2)},${Number(line.getAttribute("y1")).toFixed(2)}`;
+      return points.includes(start);
+    });
+  });
+  expect(fromPoint).toBe(true);
+
+  // the list above follows the conversation, which sits in its own block below it
+  await expect(page.locator(".proposal", { hasText: "Softer wording." })).toBeVisible();
+  await expect(page.locator(".proposal", { hasText: "Look here." })).toHaveCount(0);
+  await expect(page.locator(".proposal", { hasText: "Added on request." })).toBeVisible();
+  await expect(page.locator(".proposal")).toHaveCount(6);  // one tick left the list, and two new marks joined it
+  await expect(page.locator(".panelBody #chat")).toHaveCount(0);
+  const list = (await page.locator(".proposal").first().boundingBox())!;
+  const input = (await page.locator(".chatInput").boundingBox())!;
+  expect(Math.round(input.x)).toBe(Math.round(list.x));  // the two blocks line up
+  expect(Math.round(input.width)).toBe(Math.round(list.width));
+  const panel = (await page.locator("#panel").boundingBox())!;
+  const block = (await page.locator("#chat").boundingBox())!;
+  expect(Math.round(block.y + block.height)).toBe(Math.round(panel.y + panel.height));
+  expect(Math.abs(block.height - panel.height / 2)).toBeLessThan(2);  // half and half by default
+  await page.keyboard.press("Escape");
+  await page.locator("main").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Control+z");  // a change can be undone
+  await expect(page.locator(".gradeStamp")).toHaveCount(0);
+  await page.keyboard.press("Control+y");
+  await saved(page);
+
+  await openFile(page, "claude.pdf", "Sheet 1");  // and nothing is applied twice on reopening
+  await expect(page.locator(".turn.claude")).toHaveText("已按要求修改。");
+  await expect(marks(page)).toHaveCount(12);
+  await expect(page.locator(".page .note", { hasText: "Softer wording." })).toBeVisible();
+
+  // a reply can be stopped, and the message stays in the conversation
+  const before = await marks(page).count();
+  await box.fill("先别改了");
+  await box.press("Enter");
+  await expect(page.locator("#chat .working")).toBeVisible();
+  await page.getByRole("button", { name: "停止" }).click();
+  await expect(page.locator(".turn.claude").last()).toHaveText("已停止。", { timeout: 4000 });
+  await expect(page.locator(".turn.teacher").last()).toHaveText("先别改了");
+  await expect(page.locator("#chat .working")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "发送" })).toBeVisible();
+  await expect(marks(page)).toHaveCount(before);
 
   await page.getByRole("button", { name: "全部删除" }).click();
-  await expect(marks(page)).toHaveCount(0);
+  await expect(marks(page)).toHaveCount(1);  // Claude's marks go, and the grade stays
   await expect(page.getByRole("button", { name: "全部删除" })).toBeDisabled();
 });
 
@@ -314,9 +395,46 @@ test("a submission gets one grade, stamped on it and shown in the list", async (
   await expect(page.locator(".file.on .gradeTag")).toHaveCount(0);
 });
 
+test("a comment box resizes from every corner, and never gets shorter than its text", async ({ page }) => {
+  await openFile(page, "flow.pdf", "Sheet 1");
+  await page.keyboard.press("4");
+  await page.mouse.click(...(await pagePoint(page, 300, 300)));
+  await expect(editor(page)).toBeFocused();
+  await page.keyboard.type("Resize me");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("v");
+  const note = page.locator(".page .note", { hasText: "Resize me" });
+  const start = (await note.boundingBox())!;
+  await page.mouse.click(start.x + 20, start.y + 8);
+  const pull = async (handle: string, dx: number, dy: number) => {
+    const h = (await page.locator(`[data-handle="${handle}"]`).boundingBox())!;
+    const x = h.x + h.width / 2, y = h.y + h.height / 2;
+    await drag(page, [x, y], [x + dx, y + dy]);
+    return (await note.boundingBox())!;
+  };
+
+  const taller = await pull("se", 40, 60);
+  expect(Math.round(taller.width - start.width)).toBe(40);
+  expect(Math.round(taller.height - start.height)).toBe(60);
+
+  const wider = await pull("ne", 30, -20);  // the corner a delete button used to cover
+  expect(Math.round(wider.width - taller.width)).toBe(30);
+  expect(Math.round(wider.height - taller.height)).toBe(20);
+
+  const left = await pull("nw", -25, 10);
+  expect(Math.round(left.x - wider.x)).toBe(-25);
+  expect(Math.round(left.height - wider.height)).toBe(-10);
+
+  const squashed = await pull("se", 0, -400);
+  expect(squashed.height).toBeGreaterThanOrEqual(start.height - 1);  // the text always fits
+  await saved(page);
+  await openFile(page, "flow.pdf", "Sheet 1");
+  await expect(page.locator(".page .note", { hasText: "Resize me" })).toBeVisible();
+});
+
 test("marking rules are kept for the folder and reach Claude", async ({ page }) => {
   await openFile(page, "later.pdf", "Sheet 10");
-  const rules = page.locator("#panel textarea");
+  const rules = page.locator("#rules");
   await rules.fill("Use the lecturer's notation.");
   await page.getByRole("button", { name: "让 Claude 批改" }).click();
   await expect(page.getByText("Rules seen.")).toBeVisible();
@@ -325,6 +443,26 @@ test("marking rules are kept for the folder and reach Claude", async ({ page }) 
   await expect(page.locator("#empty h1")).toBeVisible();
   await page.locator(".file", { hasText: "later.pdf" }).click();
   await expect(rules).toHaveValue("Use the lecturer's notation.");
+});
+
+test("moving to another file while Claude works doesn't restart it", async ({ page }) => {
+  await openFile(page, "switch.pdf", "Sheet 1");
+  await page.getByRole("button", { name: "让 Claude 批改" }).click();
+  const seconds = async () => parseInt((await page.locator(".working .elapsed").textContent()) ?? "0", 10);
+  await expect(page.locator(".thinking", { hasText: "正在看第 2 处" })).toBeVisible();
+  await expect.poll(seconds).toBeGreaterThanOrEqual(1);
+  const before = await seconds();
+
+  await page.locator(".file", { hasText: "rotated.pdf" }).click();
+  await expect(page.locator(".file.on")).toContainText("rotated.pdf");
+  await page.locator(".file", { hasText: "switch.pdf" }).click();
+  await expect(page.locator(".file.on")).toContainText("switch.pdf");
+
+  await expect(page.locator(".thinking", { hasText: "正在看第 2 处" })).toBeVisible();  // the same run, further on
+  expect(await seconds()).toBeGreaterThanOrEqual(before);
+  await expect(page.getByRole("button", { name: "重新批改" })).toBeVisible({ timeout: 10000 });
+  await expect(page.locator(".thinking .step", { hasText: "正在看第 1 处" })).toHaveCount(1);  // it ran once
+  await expect(page.locator(".claudeDelete button")).toHaveCount(5);  // and nothing doubled
 });
 
 test("cancelling stops Claude straight away", async ({ page }) => {
@@ -426,6 +564,67 @@ test("the reference sits beside the work when there is room, and below it when t
 
   await page.setViewportSize({ width: 1800, height: 900 });
   await expect(page.locator(".app.stacked")).toHaveCount(0);
+});
+
+test("nothing invites a browser to translate the student's work", async ({ page }) => {
+  await openFile(page, "nested.pdf", "Sheet 2", "Sheet 2/deep");
+  await expect(page.locator("html")).toHaveAttribute("translate", "no");
+  await expect(page.locator('meta[name="google"]')).toHaveAttribute("content", "notranslate");
+  await expect(page.locator(".page img")).toHaveCount(0);
+  await expect(page.locator(".page .scan").first()).toHaveAttribute("translate", "no");
+  await expect.poll(() => page.locator(".page .scan").first().evaluate((node) => getComputedStyle(node).backgroundImage))
+    .toContain("/api/page");
+});
+
+test("a reload comes back to the same submission, place and reference", async ({ page }) => {
+  await openFile(page, "flow.pdf", "Sheet 1");
+  await page.getByRole("button", { name: "放大" }).click();
+  await page.locator("#referenceInput").setInputFiles({
+    name: "stay.py",
+    mimeType: "text/plain",
+    buffer: Buffer.from("x = 1\n"),
+  });
+  await page.locator(".referenceName", { hasText: "stay.py" }).click();
+  await expect(page.locator("#reference")).toContainText("stay.py");
+  const main = page.locator("main");
+  await main.evaluate((node) => { node.scrollTop = 300; });
+  await page.waitForTimeout(100);
+  const zoom = await page.locator("#zoomLabel").textContent();
+
+  await page.reload();
+  await expect(page.locator(".file.on")).toContainText("flow.pdf");
+  await expect(page.locator('.page[data-n="1"]')).toBeVisible();
+  await expect(page.locator("#empty")).toHaveCount(0);
+  await expect(page.locator("#reference")).toContainText("stay.py");
+  await expect(page.locator("#zoomLabel")).toHaveText(zoom!);
+  await expect.poll(() => main.evaluate((node) => Math.round(node.scrollTop))).toBe(300);
+});
+
+test("zooming zooms the work and not the browser page", async ({ page }) => {
+  await openFile(page, "flow.pdf", "Sheet 1");
+  const label = page.locator("#zoomLabel");
+  const percent = async () => parseInt((await label.textContent())!, 10);
+  const toolbar = (await page.locator("#tools").boundingBox())!;
+  const start = await percent();
+
+  const box = (await page.locator('.page[data-n="0"]').boundingBox())!;
+  await page.mouse.move(box.x + 200, box.y + 200);
+  const handled = await page.evaluate(() => !window.dispatchEvent(new WheelEvent("wheel", { ctrlKey: true, deltaY: -150, cancelable: true, clientX: 500, clientY: 300 })));
+  expect(handled).toBe(true);  // the browser's own zoom was stopped
+  await expect.poll(percent).toBeGreaterThan(start);
+  expect(await page.evaluate(() => window.visualViewport?.scale)).toBe(1);
+
+  const wheeled = await percent();
+  await page.keyboard.press("Control+-");
+  await expect.poll(percent).toBeLessThan(wheeled);
+  const smaller = await percent();
+  await page.keyboard.press("Control+=");
+  await expect.poll(percent).toBeGreaterThan(smaller);
+  await page.keyboard.press("Control+0");
+  await expect.poll(percent).toBe(start);
+
+  const after = (await page.locator("#tools").boundingBox())!;
+  expect(after.width).toBe(toolbar.width);  // the interface keeps its size
 });
 
 test("the API refuses other sites", async ({ request }) => {

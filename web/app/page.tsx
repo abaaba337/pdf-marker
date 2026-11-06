@@ -10,7 +10,21 @@ import { PANEL, REFERENCE, REFERENCE_HEIGHT, SIDEBAR, useWidth } from "@/compone
 import { Sidebar } from "@/components/Sidebar";
 import { TOOLS, Toolbar } from "@/components/Toolbar";
 import { ZoomControl } from "@/components/ZoomControl";
-import { deleteSelected, loadReferences, loadTree, redo, refit, save, setTool, undo, useStore } from "@/lib/store";
+import {
+  deleteSelected,
+  loadReferences,
+  loadTree,
+  redo,
+  refit,
+  rememberView,
+  restoreView,
+  save,
+  setTool,
+  stepZoom,
+  undo,
+  useStore,
+  zoomAt,
+} from "@/lib/store";
 
 const SIDE_BY_SIDE_FROM = 1000;  // room the work and the reference need next to each other
 
@@ -39,14 +53,31 @@ export default function Home() {
   useEffect(refit, [stacked, open]);
 
   useEffect(() => {
-    void loadTree().then(loadReferences);
+    void loadTree().then(loadReferences).then(restoreView);
+  }, []);
+
+  /* As in Overleaf, zooming here zooms the work, never the whole browser page. */
+  useEffect(() => {
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      zoomAt(Math.exp(-event.deltaY * 0.002), event.clientX, event.clientY);
+    };
+    addEventListener("wheel", onWheel, { passive: false });
+    return () => removeEventListener("wheel", onWheel);
   }, []);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if ((event.target as HTMLElement).matches("textarea, select, input")) return;
       const command = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
+      if (command && (key === "=" || key === "+" || key === "-" || key === "0")) {
+        event.preventDefault();
+        if (key === "0") refit();
+        else stepZoom(key === "-" ? 1 / 1.2 : 1.2);
+        return;
+      }
+      if ((event.target as HTMLElement).matches("textarea, select, input")) return;
       if (command && key === "s") {
         event.preventDefault();
         void save();
@@ -94,7 +125,7 @@ export default function Home() {
     >
       <Sidebar state={state} width={sidebar.width} onResize={sidebar.setWidth} />
       <Toolbar state={state} />
-      <main id="main">
+      <main id="main" onScroll={rememberView}>
         {!state.file && state.loaded && <EmptyState hasWorkspace={Boolean(state.root)} />}
         {state.file &&
           state.pages.map((page, n) => <PageCanvas key={`${state.file}:${n}`} n={n} page={page} state={state} />)}

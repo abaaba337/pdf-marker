@@ -10,6 +10,7 @@ import {
   NOTE_AFTER,
   NOTE_SIZE,
   NOTE_WIDTH,
+  bounds,
   type NoteMark,
   STAMP_SIZE,
   STAMP_WIDTH,
@@ -45,9 +46,29 @@ export interface ClaudeResult {
   draft: string;
   error: string;
   rejected: string[];
+  chat: { role: "teacher" | "claude"; text: string; log?: ClaudeNote[] }[];
+  edits: ClaudeEdit[];
+  turn: ClaudeNote[];  // the steps of the reply in progress
+  elapsed?: number;  // seconds this run has been going, from the server: it survives moving between files
 }
 
-const NO_CLAUDE: ClaudeResult = { state: "idle", summary: "", marks: [], log: [], draft: "", error: "", rejected: [] };
+type ClaudeEdit =
+  | { op: "remove"; id: string }
+  | { op: "comment"; id: string; text: string }
+  | { op: "grade"; letter: string };
+
+const NO_CLAUDE: ClaudeResult = {
+  state: "idle",
+  summary: "",
+  marks: [],
+  log: [],
+  draft: "",
+  error: "",
+  rejected: [],
+  chat: [],
+  edits: [],
+  turn: [],
+};
 
 export type ReferenceView =
   | { kind: "pages"; pages: { w: number; h: number }[] }
@@ -328,7 +349,8 @@ export function pointerMove(event: ReactPointerEvent<SVGSVGElement>) {
   } else if (original.type === "line") {
     patch = gesture.handle === "p1" ? { x1: p.x, y1: p.y } : { x2: p.x, y2: p.y };
   } else {
-    patch = resized(original, gesture.handle!, p);
+    const box = resized(original, gesture.handle!, p);
+    patch = original.type === "text" ? { ...box, boxHeight: box.h } : box;
   }
   gesture.changed = true;
   set({ marks: patchMark(original.id, patch) });
@@ -381,6 +403,26 @@ export function deleteSelected() {
 
 export function stepZoom(factor: number) {
   set({ zoom: Math.min(4, Math.max(0.3, state.zoom * factor)) });
+  rememberView();
+}
+
+/* Zoom the work around a point on screen, so that what is under the pointer stays there. */
+export function zoomAt(factor: number, clientX: number, clientY: number) {
+  const main = document.getElementById("main");
+  if (!main || !state.file) return;
+  const box = main.getBoundingClientRect();
+  const x = clientX - box.left;
+  const y = clientY - box.top;
+  const before = state.zoom;
+  const zoom = Math.min(4, Math.max(0.3, before * factor));
+  const scale = zoom / before;
+  const left = (main.scrollLeft + x) * scale - x;
+  const top = (main.scrollTop + y) * scale - y;
+  set({ zoom });
+  requestAnimationFrame(() => {
+    main.scrollTo(left, top);
+    rememberView();
+  });
 }
 
 /* ---------- files ---------- */
@@ -431,6 +473,38 @@ export async function save() {
   }
 }
 
+/* A reload comes back to the same submission, in the same place. */
+const viewKey = () => "pdf-marker-view:" + state.root;
+
+export function rememberView() {
+  const main = document.getElementById("main");
+  if (!state.file || !main) return;
+  const view = { file: state.file, top: main.scrollTop, left: main.scrollLeft, zoom: state.zoom, reference: state.reference?.name };
+  try {
+    localStorage.setItem(viewKey(), JSON.stringify(view));
+  } catch {
+    /* private window: a reload starts from the list */
+  }
+}
+
+export async function restoreView() {
+  let view: { file?: string; top?: number; left?: number; zoom?: number; reference?: string } = {};
+  try {
+    view = JSON.parse(localStorage.getItem(viewKey()) ?? "{}");
+  } catch {
+    return;
+  }
+  const exists = state.groups.some((group) => group.files.some((row) => row.file === view.file));
+  if (state.file || !view.file || !exists) return;
+  await openFile(view.file);
+  if (view.reference && state.references.includes(view.reference)) await openReference(view.reference);
+  if (view.zoom) set({ zoom: view.zoom });
+  requestAnimationFrame(() => {
+    const main = document.getElementById("main");
+    main?.scrollTo(view.left ?? 0, view.top ?? 0);
+  });
+}
+
 export async function openFile(next: string) {
   if (next === state.file || !(await save())) return;
   try {
@@ -450,6 +524,8 @@ export async function openFile(next: string) {
       status: { text: doc.marks.length ? `已载入 ${doc.marks.length} 处批注，可继续修改` : "", error: false },
     });
     main.scrollTop = 0;
+    rememberView();
+    opening = true;
     void loadClaude();
     void loadGuidance();
   } catch (error) {
@@ -522,6 +598,7 @@ export async function openReference(name: string) {
     const url = "/api/reference/view?name=" + encodeURIComponent(name);
     set({ reference: { name, view: await api<ReferenceView>(url) } });
     refit();
+    rememberView();
   } catch (error) {
     status(`打不开 ${name}：${(error as Error).message}`, true);
   }
@@ -530,6 +607,7 @@ export async function openReference(name: string) {
 export function closeReference() {
   set({ reference: null });
   refit();
+  rememberView();
 }
 
 export const referencePage = (name: string, n: number) =>
@@ -550,7 +628,10 @@ async function loadClaude() {
   if (file !== state.file) return;
   const seen = state.claude.marks.length;
   set({ claude, cancelling: claude.state === "running" && state.cancelling });
+  if (opening) applied = claude.edits.length;  // edits from an earlier session are already in place
+  opening = false;
   mergeClaude();
+  applyEdits();
   if (claude.state !== "running") return;
   poll = setTimeout(() => void loadClaude(), 600);
   const newest = claude.marks.at(-1);
@@ -579,9 +660,46 @@ export async function saveGuidance() {
   await api("/api/guidance", post({ text: state.instruction }));
 }
 
+/* Changes Claude makes in a conversation arrive one by one, and each can be undone. */
+let applied = 0;
+let opening = false;
+
+function applyEdits() {
+  for (const edit of state.claude.edits.slice(applied)) {
+    applied += 1;
+    if (edit.op === "remove") deleteClaudeMark(edit.id);
+    else if (edit.op === "comment") commit(patchMark(edit.id, { text: edit.text }));
+    else if (!state.marks.some((mark) => isGrade(mark) && mark.type === "text" && mark.text === edit.letter)) {
+      setGrade(edit.letter);
+    }
+  }
+}
+
+export async function sendChat(message: string) {
+  if (!state.file || !message.trim() || state.claude.state === "running") return;
+  applied = 0;
+  const marks = state.marks.map((mark) => ({
+    id: mark.id,
+    by: mark.fromClaude ? "claude" : "teacher",
+    type: mark.type,
+    page: mark.page,
+    ...bounds(mark),
+    ...(mark.type === "text" ? { text: mark.text, anchor: mark.anchor, grade: mark.grade } : {}),
+  }));
+  const chat = [...state.claude.chat, { role: "teacher" as const, text: message.trim() }];
+  set({ claude: { ...state.claude, state: "running", chat, edits: [], turn: [], draft: "" } });
+  try {
+    await api("/api/claude/chat", post({ file: state.file, message, marks }));
+    await loadClaude();
+  } catch (error) {
+    set({ claude: { ...state.claude, state: "failed", error: (error as Error).message } });
+  }
+}
+
 export async function startClaude() {
   if (!state.file) return;
   followed = -1;
+  applied = 0;
   await saveGuidance();
   const others = state.marks.filter((mark) => !mark.fromClaude);
   if (others.length < state.marks.length) commit(others);  // a new run replaces the last one; undo brings it back

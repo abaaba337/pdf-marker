@@ -162,6 +162,8 @@ def check_answer_run(root):
     assert run(folder, "reference_1.py").strip() == "from the answer 42"
     (folder / "reference_2.py").write_text("print('from the answer', 6 * 7)")
     assert len(list(marker_tools.ANSWER_CACHE.glob("*"))) == 1, "one version runs once"
+    assert "from the answer 42" in marker_tools.known_output(b"print('from the answer', 6 * 7)")
+    assert marker_tools.known_output(b"print('a new version')") is None, "a changed answer runs again"
     assert run(folder, "reference_2.py").strip() == "from the answer 42"
 
     (folder / "reference_3.py").write_text("print('so far')\nraise ValueError('broken answer')")
@@ -202,18 +204,57 @@ def check_claude(root):
         "not a mark",
     ]
     marks = claude_marker.to_marks(items, lines, pages)
-    assert [m["type"] for m in marks] == ["tick", "cross", "text", "text", "highlight", "text"], marks
+    assert [m["type"] for m in marks] == ["tick", "cross", "text", "line", "text", "highlight", "text"], marks
     cross, note = marks[1], marks[2]
     assert note["anchor"] == cross["id"] and note["text"] == "wrong sign"
-    assert "anchor" not in marks[3], "a plain remark links to nothing"
-    assert all(m["x"] + m.get("w", 0) <= 595 for m in marks)
-    assert marks[2]["y"] < marks[3]["y"], "notes on one line must not stack on each other"
+    assert marks[4]["anchor"] == marks[3]["id"], "a comment never floats: it points at an underline"
+    assert all(m.get("x", 0) + m.get("w", 0) <= 595 for m in marks)
+    assert marks[2]["y"] < marks[4]["y"], "notes on one line must not stack on each other"
+
+    # notes sit near their marks, apart from each other and off the student's work
+    page_text = [{"page": 0, "line": i, "text": "x", "box": [60, 60 + i * 22, 300, 72 + i * 22]} for i in range(30)]
+    placed = claude_marker.to_marks(
+        [{"page": 0, "line": i, "kind": "cross", "comment": "A comment long enough to need two lines here."}
+         for i in (20, 3, 4, 5, 25, 6)], page_text, pages)
+    notes = [m for m in placed if m["type"] == "text"]
+    for one in notes:
+        assert one["x"] >= 300, "off the student's text"
+        for other in notes:
+            if one is not other:
+                assert abs(one["y"] - other["y"]) >= 38, "apart from each other"
+    assert abs(notes[0]["y"] - page_text[20]["box"][1]) < 60, "a late mark's note stays beside its line"
+
+    # comments are for the student: nothing about the reference, or to the teacher
+    for leak in ("This does not match the reference.", "The Reference's fifth solution differs.", "See the model solution.",
+                 "Flagging this for the teacher.", "The answer's output has 18 twice."):
+        assert claude_marker.to_marks([{"page": 0, "line": 0, "kind": "cross", "comment": leak}], lines, pages) == [], leak
+        call = {"method": "tools/call", "params": {"name": "cross", "arguments": {"page": 0, "comment": leak}}}
+        assert marker_tools.answer(call)["isError"], leak
+    fine = "18 has a second decomposition, 9, 12, 15, which this loop never reaches."
+    assert len(claude_marker.to_marks([{"page": 0, "line": 0, "kind": "cross", "comment": fine}], lines, pages)) == 2
+
+    # a note added in a conversation keeps clear of a note already there
+    placer = claude_marker.Placer(page_text, pages)
+    placer.notes[0] = [(334, 126, 524, 146)]
+    added = [m for m in placer.place({"page": 0, "line": 3, "kind": "cross", "comment": "New."}) if m["type"] == "text"][0]
+    assert not (added["y"] < 146 and added["y"] + 20 > 126 and added["x"] < 524), added
+
+    # target narrows a mark to the words the problem is in
+    chars = [(c, 100 + 10 * i, 110 + 10 * i) for i, c in enumerate("    found = True")]
+    code = [{"page": 0, "line": 0, "text": "found = True", "box": [100, 200, 260, 214], "chars": chars}]
+    item = {"page": 0, "line": 0, "kind": "circle", "comment": "c", "target": "True"}
+    circle = claude_marker.to_marks([item], code, pages)[0]
+    assert (circle["x"], circle["w"]) == (216, 48), circle  # the four letters, plus a margin of 4 each side
+    whole = claude_marker.to_marks([{**item, "target": "not on this line"}], code, pages)[0]
+    assert whole["w"] == 168, "unknown words fall back to the whole line"
+    underline = claude_marker.to_marks([{**item, "kind": "line", "target": "found"}], code, pages)[0]
+    assert (underline["x1"], underline["x2"]) == (140, 190)
 
     # Claude may use the toolbar's tools and nothing else
     toolbar = ["tick", "cross", "highlight", "comment", "circle", "line", "arrow"]
     placed = claude_marker.to_marks([{"page": 0, "line": 0, "kind": k, "comment": "c"} for k in toolbar], lines, pages)
     symbols = [m for m in placed if m["type"] != "text"]
-    assert [m["type"] for m in symbols] == ["tick", "cross", "highlight", "circle", "line", "line"]
+    assert [m["type"] for m in symbols] == ["tick", "cross", "highlight", "line", "circle", "line", "line"]
     assert symbols[-1]["arrow"] is True and "arrow" not in symbols[-2]
     assert claude_marker.to_marks([{"page": 0, "line": 0, "kind": "stamp", "comment": "c"}], lines, pages) == []
     save_marks(root / "sheet.pdf", [{**m, "page": 0} for m in placed])  # every kind must also save
@@ -267,6 +308,11 @@ def check_claude(root):
         for line in found:
             assert doc[line["page"]].rect.contains(fitz.Rect(line["box"])), line
         assert {line["page"] for line in found} == {0, 1}
+        for line in found:
+            assert "".join(c[0] for c in line["chars"]).strip() == line["text"], line["text"]
+        plain = next(line for line in found if line["text"] == "Plain page")
+        part = claude_marker.target_box(plain, "page")
+        assert plain["box"][0] < part[0] < part[2] <= plain["box"][2] + 1, "real character positions"
 
     site = Workspace(root)
     site.add_reference("answer.py", b"print(1)")
@@ -290,10 +336,11 @@ def check_claude(root):
     assert flags[flags.index("--setting-sources") + 1] == "", "no user, project or local settings"
     assert flags[flags.index("--tools") + 1] == "Read", "no other built-in tool"
     allowed = flags[flags.index("--allowedTools") + 1:]
-    assert sorted(allowed) == sorted("mcp__marker__" + name for name in [*toolbar, "grade", "run_answer"])
+    extras = ["grade", "remove_mark", "change_comment", "run_answer"]
+    assert sorted(allowed) == sorted("mcp__marker__" + name for name in [*toolbar, *extras])
     assert not any(flag.startswith("--dangerously") or flag == "--permission-mode" for flag in flags)
     names = [tool["name"] for tool in marker_tools.tool_list()]
-    assert sorted(names) == sorted([*toolbar, "grade", "run_answer"]), "the toolbar, a grade, and the reference answer"
+    assert sorted(names) == sorted([*toolbar, *extras]), "the toolbar, a grade, edits and the reference answer"
     assert "run_answer" not in claude_marker.KINDS, "running an answer is not a mark"
     assert marker_tools.answer({"method": "tools/call", "params": {"name": "bash"}})["isError"]
 
@@ -304,7 +351,8 @@ def check_claude(root):
     assert jobs.status(pdf)["rejected"] == [], "results saved before this feature must still open"
     jobs.reject(pdf, ["a"])
     assert jobs.status(pdf)["rejected"] == ["a"] and jobs.status(pdf)["summary"] == "s"
-    jobs.running[pdf] = {"log": [], "marks": [], "summary": "", "draft": "", "rejected": []}
+    jobs.running[pdf] = {"log": [], "marks": [], "summary": "", "draft": "", "rejected": [], "base": {},
+                         "started": 0}
     jobs.reject(pdf, ["b"])
     assert jobs.status(pdf)["rejected"] == ["b"]
     del jobs.running[pdf]
@@ -317,6 +365,23 @@ def check_claude(root):
         {"type": "tool_use", "name": "mcp__marker__grade", "input": {"letter": "A+"}}]}})
     assert [(m["text"], m["grade"], m["page"]) for m in job["marks"]] == [("B+", True, 0)]
     assert job["marks"][0]["x"] + job["marks"][0]["w"] <= 595
+
+    # in a conversation Claude's changes become edits, and a stored result agrees with them
+    job = {"log": [], "marks": [], "summary": "", "draft": "", "edits": [], "reply": ""}
+    reader = claude_marker.Reader(job, claude_marker.Placer(lines, pages))
+    for event in (
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "mcp__marker__remove_mark", "input": {"id": "a"}},
+            {"type": "tool_use", "name": "mcp__marker__change_comment", "input": {"id": "n", "comment": "Kinder."}},
+            {"type": "tool_use", "name": "mcp__marker__grade", "input": {"letter": "A"}},
+            {"type": "tool_use", "name": "mcp__marker__grade", "input": {"letter": "Z"}}]}},
+        text("REPLY 改好了"),
+        {"type": "stream_event", "event": {"type": "content_block_stop"}},
+    ):
+        reader.feed(json.dumps(event))
+    assert [e["op"] for e in job["edits"]] == ["remove", "comment", "grade"] and job["reply"] == "改好了"
+    stored = [{"id": "a"}, {"id": "b", "anchor": "a"}, {"id": "n", "text": "Harsh."}]
+    assert claude_marker.with_edits(stored, job["edits"]) == [{"id": "n", "text": "Kinder."}]
 
     # only real reads are reported as reads
     job, _ = stream({"type": "assistant", "message": {"content": [

@@ -311,7 +311,7 @@ def reference_for_claude(path):
         return ".txt", "\n".join(page.get_text() for page in doc).encode("utf-8")
 
 
-def start_marking(workspace, jobs, rel, instruction):
+def start_marking(workspace, jobs, rel, instruction, chat=None):
     pdf = workspace.resolve(rel)
     with fitz.open(pdf) as doc:
         for page in doc:
@@ -320,7 +320,7 @@ def start_marking(workspace, jobs, rel, instruction):
         pages = [{"w": p.rect.width, "h": p.rect.height} for p in doc]
         data = doc.tobytes()
     references = [reference_for_claude(path) for path in workspace.references()]
-    jobs.start(pdf, data, lines, pages, references, instruction)
+    jobs.start(pdf, data, lines, pages, references, instruction, **({"chat": chat} if chat else {}))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -416,6 +416,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply({"ok": True})
             elif self.path == "/api/guidance":
                 self.workspace.save_guidance(str(body["text"]))
+                self.reply({"ok": True})
+            elif self.path == "/api/claude/chat":
+                chat = {"message": str(body["message"]).strip()[:4000], "marks": body["marks"]}
+                start_marking(self.workspace, self.jobs, body["file"], self.workspace.guidance().strip(), chat)
                 self.reply({"ok": True})
             elif self.path == "/api/claude/reject":
                 self.jobs.reject(self.workspace.resolve(body["file"]), [str(item) for item in body["ids"]])

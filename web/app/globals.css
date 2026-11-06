@@ -560,14 +560,15 @@ main {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.05), 0 6px 24px rgba(40, 35, 25, 0.05);
 }
 
-.page img {
-  display: block;
+.page .scan {
   width: 100%;
   height: 100%;
   border-radius: 2px;
+  background-size: 100% 100%;
 }
 
 .page > svg {
+  user-select: none;  /* dragging a mark must not select text across the page */
   position: absolute;
   inset: 0;
   width: 100%;
@@ -601,6 +602,7 @@ foreignObject {
 }
 
 textarea.note {
+  user-select: text;
   display: block;
   width: 100%;
   resize: none;
@@ -671,7 +673,8 @@ textarea.note::placeholder {
 .panelBody {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 0 16px 24px;
 }
 
@@ -793,6 +796,180 @@ textarea.note::placeholder {
 
 .thinking .step {
   color: var(--ink);
+}
+
+#chat {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  max-height: 75%;
+  padding: 0 16px 14px;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;  /* the same gutter as the list above, so their edges line up */
+  background: var(--bone);
+  border-top: 1px solid var(--line-strong);
+}
+
+#panel #chat h3 {
+  flex: none;
+  margin: 12px 0 8px;
+}
+
+.chatLog {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.chatLog .working {
+  margin: 2px 0 8px;
+}
+
+.steps {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.steps summary {
+  height: 22px;
+  padding: 0 2px;
+  gap: 6px;
+}
+
+.thinkingSteps {
+  margin: 2px 0 8px 5px;
+  padding-left: 9px;
+  border-left: 2px solid var(--line-strong);
+  font-size: 12px;
+  color: var(--soft-ink);
+}
+
+.thinkingSteps p {
+  margin: 0 0 3px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.thinkingSteps .read,
+.thinkingSteps .thought {
+  color: var(--muted);
+}
+
+.thinkingSteps .read,
+.thinkingSteps .output {
+  font: 11px/1.45 var(--mono);
+}
+
+.thinkingSteps .run {
+  font-weight: 600;
+}
+
+.thinkingSteps .output {
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.chatHint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.chatInput {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 6px 6px 6px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  transition: border-color 0.15s;
+}
+
+.chatInput:focus-within {
+  border-color: var(--ink);
+}
+
+#panel .chatInput textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 44px;
+  padding: 3px 0;
+  resize: none;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+}
+
+.chatInput button {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  justify-content: center;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--black);
+  color: #fff;
+}
+
+.chatInput button:hover:not(:disabled) {
+  background: #333;
+}
+
+.chatInput button svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 2.4;
+}
+
+.turn {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.turn.teacher {
+  width: fit-content;
+  max-width: 88%;
+  margin-left: auto;
+  padding: 6px 10px;
+  border-radius: 10px 10px 2px 10px;
+  background: rgba(0, 0, 0, 0.07);
+}
+
+.turn.claude {
+  color: var(--ink);
+}
+
+.working {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 8px 0 0;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.working .spark {
+  width: 14px;
+  text-align: center;
+  font-size: 15px;
+  line-height: 1;
+  color: #d97757;
+}
+
+.working .elapsed {
+  font-weight: 400;
+  color: var(--muted);
 }
 
 .thinking .run {
