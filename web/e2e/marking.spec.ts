@@ -552,6 +552,12 @@ test("the reference sits beside the work when there is room, and below it when t
   expect(Math.round(below.width)).toBe(Math.round(above.width));
   expect(below.x + below.width).toBeLessThanOrEqual(1100);
 
+  for (const width of [1760, 1500, 1300]) {  // nothing is cut off at the usual widths, with both panels open
+    await page.setViewportSize({ width, height: 900 });
+    await expect.poll(() => page.locator(".app > header").evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+  }
+  await page.setViewportSize({ width: 1100, height: 900 });
+
   // the toolbar's controls never land on each other
   const history = await box(page.locator(".history"));
   expect((await box(page.locator("#save"))).x).toBeGreaterThanOrEqual(history.x + history.width);

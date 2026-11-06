@@ -457,13 +457,13 @@ header {
 }
 
 /* Narrow windows or a wide sidebar: drop the extras before anything overflows */
-@container toolbar (max-width: 1010px) {
+@container toolbar (max-width: 1220px) {
   #tools kbd {
     display: none;
   }
 }
 
-@container toolbar (max-width: 900px) {
+@container toolbar (max-width: 1010px) {
   #tools .label,
   #openPdf {
     display: none;

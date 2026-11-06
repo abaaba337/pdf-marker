@@ -2,6 +2,10 @@
 
 Mark up a folder of PDFs in a local web page: ticks, crosses, highlights, comments, circles and lines. Marks are saved into the original PDF as standard annotations, so students see them in any PDF viewer, and they stay editable when you reopen the file here.
 
+![PDF Marker with a marked page, a grade, a reference answer and a conversation with Claude](docs/screenshot.png)
+
+*The submission shown is made up.*
+
 Everything runs on your own computer. The server listens on `127.0.0.1` only and the page loads nothing from the internet. Files leave the machine in one case: when you press the button that asks Claude to mark a file.
 
 ## Start
