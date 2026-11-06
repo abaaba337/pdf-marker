@@ -4,4 +4,11 @@
 *.tmp
 
 __pycache__/
+web/node_modules/
+web/.next/
+web/out/
+web/next-env.d.ts
+web/*.tsbuildinfo
+web/test-results/
+web/playwright-report/
 .playwright-mcp/

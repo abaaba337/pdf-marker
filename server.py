@@ -23,8 +23,12 @@ import fitz
 KEY = "MarkerData"
 LEADER_KEY = "MarkerLeader"  # thin line from a mark to its note; rebuilt from the note on save
 HERE = Path(__file__).resolve().parent
+SITE = HERE / "web" / "out"  # the built page: run `npm run build` in web/
+CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css",
+                 ".txt": "text/plain; charset=utf-8", ".json": "application/json",
+                 ".svg": "image/svg+xml", ".woff2": "font/woff2"}
 CONFIG = Path.home() / ".pdf-marker.json"  # remembers the last workspace
-NOTE_FILL = (1, 0.98, 0.8)
+NOTE_FILL = (0.984, 0.953, 0.859)  # same pale yellow as the page
 TEXT_PAD = 8  # room PyMuPDF keeps inside a text box, in points
 SHAPES = {
     "tick": [[(0, 0.55), (0.35, 1), (1, 0)]],
@@ -156,6 +160,12 @@ def pick_folder(initial):
     return chosen
 
 
+def site_file(url_path):
+    """The built file for a URL path, or None. Nothing outside SITE is ever served."""
+    path = (SITE / (url_path.lstrip("/") or "index.html")).resolve()
+    return path if path.is_relative_to(SITE.resolve()) and path.is_file() else None
+
+
 class Workspace:
     def __init__(self, root=None):
         self.root = None
@@ -208,14 +218,15 @@ class Workspace:
 
 class Handler(BaseHTTPRequestHandler):
     workspace = None
+    ui_port = None  # the Next.js development server, when one is proxying to this server
 
     def log_message(self, *args):
         pass
 
     def allowed(self):
         """Refuse requests that did not come from this page (other sites, DNS rebinding)."""
-        port = self.server.server_address[1]
-        hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        ports = {self.server.server_address[1], self.ui_port}
+        hosts = {f"{name}:{port}" for name in ("127.0.0.1", "localhost") for port in ports}
         origin = self.headers.get("Origin")
         return self.headers.get("Host") in hosts and (
             origin is None or origin.split("//")[-1] in hosts)
@@ -223,12 +234,15 @@ class Handler(BaseHTTPRequestHandler):
     def reply(self, body, kind="application/json", status=200):
         if not isinstance(body, bytes):
             body = json.dumps(body, ensure_ascii=False).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", kind)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", kind)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+        except ConnectionError:
+            pass  # the page moved on, for example to another file
 
     def do_GET(self):
         if not self.allowed():
@@ -236,9 +250,7 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         args = {k: v[0] for k, v in parse_qs(url.query).items()}
         try:
-            if url.path == "/":
-                self.reply((HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
-            elif url.path == "/api/tree":
+            if url.path == "/api/tree":
                 self.reply(self.workspace.tree())
             elif url.path == "/api/doc":
                 with fitz.open(self.workspace.resolve(args["file"])) as doc:
@@ -253,6 +265,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.reply(pixmap.tobytes("png"), "image/png")
             elif url.path == "/pdf":
                 self.reply(self.workspace.resolve(args["file"]).read_bytes(), "application/pdf")
+            elif page := site_file(url.path):
+                self.reply(page.read_bytes(), CONTENT_TYPES.get(page.suffix, "application/octet-stream"))
             else:
                 self.reply({"error": "not found"}, status=404)
         except (KeyError, ValueError, IndexError, fitz.FileDataError) as error:
@@ -293,8 +307,12 @@ def main():
     parser.add_argument("--root", help="workspace folder (default: the last one used)")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--ui-port", type=int, help="port of the Next.js development server")
     args = parser.parse_args()
     Handler.workspace = Workspace(args.root or last_workspace())
+    Handler.ui_port = args.ui_port
+    if not site_file("/") and not args.ui_port:
+        print("The page is not built yet: run `npm install` and `npm run build` in web/")
     server = HTTPServer(("127.0.0.1", args.port), Handler)
     url = f"http://127.0.0.1:{args.port}/"
     print(f"PDF Marker: {url}  (Ctrl+C to stop)")

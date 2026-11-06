@@ -107,6 +107,19 @@ def check_workspace(root):
         raise AssertionError(f"{bad} must be refused")
 
 
+def check_site(root):
+    site = root / "site"
+    (site / "_next").mkdir(parents=True)
+    (site / "index.html").write_text("page")
+    (site / "_next" / "app.js").write_text("code")
+    (root / "secret.pdf").write_text("private")
+    server.SITE = site
+    assert server.site_file("/").name == "index.html"
+    assert server.site_file("/_next/app.js").name == "app.js"
+    for bad in ("/../secret.pdf", "/_next/../../secret.pdf", "/missing.js", "/_next"):
+        assert server.site_file(bad) is None, bad
+
+
 def main():
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)
@@ -115,6 +128,7 @@ def main():
         check_saving(path)
         check_rotation(path)
         check_workspace(root)
+        check_site(root)
     print("all checks passed")
 
 
