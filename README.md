@@ -1,3 +1,5 @@
+<img src="docs/icon.png" alt="" width="72">
+
 # PDF Marker
 
 ![PDF Marker with a marked page, a grade, a reference answer and a conversation with Claude](docs/screenshot.png)
