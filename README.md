@@ -87,6 +87,10 @@ To block a commit that adds a PDF, enable the hook once per clone:
 git config core.hooksPath .githooks
 ```
 
+## Contributing
+
+Only the owner pushes to `main`. Everyone else opens a pull request, which merges after the owner approves it. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
 MIT
