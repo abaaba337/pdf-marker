@@ -29,7 +29,7 @@ HERE = Path(__file__).resolve().parent
 SITE = HERE / "web" / "out"  # the built page: run `npm run build` in web/
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css",
                  ".txt": "text/plain; charset=utf-8", ".json": "application/json",
-                 ".svg": "image/svg+xml", ".woff2": "font/woff2"}
+                 ".svg": "image/svg+xml", ".woff2": "font/woff2", ".ico": "image/x-icon"}
 CONFIG = Path.home() / ".pdf-marker.json"  # remembers the last workspace
 PAGED_TYPES = {".pdf", ".docx"}  # PyMuPDF lays these out as pages
 HTML_TYPES = {".html", ".htm"}

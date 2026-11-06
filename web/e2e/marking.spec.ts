@@ -638,6 +638,14 @@ test("zooming zooms the work and not the browser page", async ({ page }) => {
   expect(after.width).toBe(toolbar.width);  // the interface keeps its size
 });
 
+test("the page has one icon, served as an icon", async ({ page }) => {
+  await page.goto("/");
+  const icons = await page.locator('link[rel="icon"]').evaluateAll((links) => links.map((link) => link.getAttribute("href")));
+  expect(icons).toHaveLength(1);
+  const response = await page.request.get(icons[0]!);
+  expect(response.headers()["content-type"]).toBe("image/x-icon");
+});
+
 test("the API refuses other sites", async ({ request }) => {
   const response = await request.post("/api/save", {
     headers: { Origin: "http://example.com", "Content-Type": "application/json" },
