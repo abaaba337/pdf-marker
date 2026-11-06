@@ -1,0 +1,7 @@
+# Marked work is personal data: PDFs never belong in this repository
+*.pdf
+.orig/
+*.tmp
+
+__pycache__/
+.playwright-mcp/
