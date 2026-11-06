@@ -52,8 +52,10 @@ export default function Home() {
 
   useEffect(refit, [stacked, open]);
 
+  /* The empty page waits for this, or a reload flashes it before the submission comes back. */
+  const [restored, setRestored] = useState(false);
   useEffect(() => {
-    void loadTree().then(loadReferences).then(restoreView);
+    void loadTree().then(loadReferences).then(restoreView).finally(() => setRestored(true));
   }, []);
 
   /* As in Overleaf, zooming here zooms the work, never the whole browser page. */
@@ -126,7 +128,7 @@ export default function Home() {
       <Sidebar state={state} width={sidebar.width} onResize={sidebar.setWidth} />
       <Toolbar state={state} />
       <main id="main" onScroll={rememberView}>
-        {!state.file && state.loaded && <EmptyState hasWorkspace={Boolean(state.root)} />}
+        {!state.file && state.loaded && restored && <EmptyState hasWorkspace={Boolean(state.root)} />}
         {state.file &&
           state.pages.map((page, n) => <PageCanvas key={`${state.file}:${n}`} n={n} page={page} state={state} />)}
       </main>

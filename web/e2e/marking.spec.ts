@@ -440,8 +440,7 @@ test("marking rules are kept for the folder and reach Claude", async ({ page }) 
   await expect(page.getByText("Rules seen.")).toBeVisible();
 
   await page.reload();
-  await expect(page.locator("#empty h1")).toBeVisible();
-  await page.locator(".file", { hasText: "later.pdf" }).click();
+  await expect(page.locator(".file.on")).toContainText("later.pdf");
   await expect(rules).toHaveValue("Use the lecturer's notation.");
 });
 
@@ -597,8 +596,14 @@ test("a reload comes back to the same submission, place and reference", async ({
   await page.waitForTimeout(100);
   const zoom = await page.locator("#zoomLabel").textContent();
 
+  await page.addInitScript(() => {  // the empty page must not flash up, even for a moment
+    new MutationObserver(() => {
+      if (document.getElementById("empty")) sessionStorage.setItem("emptyShown", "yes");
+    }).observe(document, { childList: true, subtree: true });
+  });
   await page.reload();
   await expect(page.locator(".file.on")).toContainText("flow.pdf");
+  expect(await page.evaluate(() => sessionStorage.getItem("emptyShown"))).toBeNull();
   await expect(page.locator('.page[data-n="1"]')).toBeVisible();
   await expect(page.locator("#empty")).toHaveCount(0);
   await expect(page.locator("#reference")).toContainText("stay.py");
