@@ -58,8 +58,12 @@ python scripts/check.py
 
 This runs the leak guard, server tests, type check, build and browser tests. The browser tests need Chrome, and they use generated PDFs in a temporary folder, never your workspace. CI runs the same script on every push.
 
-To block a commit that adds a PDF or a local path, enable the hook once per clone:
+To block a commit that adds a PDF, enable the hook once per clone:
 
 ```
 git config core.hooksPath .githooks
 ```
+
+## License
+
+MIT

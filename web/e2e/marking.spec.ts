@@ -58,6 +58,8 @@ test("the tree nests folders, starts closed and sorts numbers naturally", async 
   await expect(page.locator("#files > details > summary")).toHaveText(["Sheet 1", "Sheet 2", "Sheet 10"]);
   await openFolders(page, "Sheet 2", "Sheet 2/deep");
   await expect(page.locator(".file", { hasText: "nested.pdf" })).toBeVisible();
+  // the browser's toggle event arrives a moment after the folder opens
+  await expect.poll(() => page.evaluate(() => Object.values(localStorage).join())).toContain("Sheet 2/deep");
   await page.reload();
   await expect(page.locator(".file", { hasText: "nested.pdf" })).toBeVisible();
 });

@@ -13,7 +13,7 @@ Run the app with `start.cmd`, or `dev.cmd` for hot reload at http://127.0.0.1:30
 
 ## Hard rules
 
-- **No student data in this repository.** No PDFs, rosters, marks or names, in code, tests, fixtures, screenshots or commit messages. Tests generate their own PDFs. `scripts/guard.py` blocks the obvious cases, and it can't recognise a name.
+- **No student data in this repository.** No PDFs, rosters, marks or names, in code, tests, fixtures, screenshots or commit messages. Tests generate their own PDFs. `scripts/guard.py` blocks PDFs only; everything else on this list is on you.
 - **Automated tests never touch a real workspace.** Never script the page at port 3000 or 8765: both can save into real PDFs. Use `npm run e2e`, or `python server.py --root <throwaway folder>`.
 - **Nothing leaves the machine.** Keep the `127.0.0.1` binding and the Host and Origin checks. The page loads no CDN, web font or analytics, and `web/e2e` fails on any outside request.
 - **Workspace paths come only from the native folder dialog or `--root`,** never from an HTTP request.

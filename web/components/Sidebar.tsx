@@ -1,4 +1,4 @@
-import { type PointerEvent, useEffect, useMemo, useState } from "react";
+import { type PointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { type FileRow, type Group, openFile, pickWorkspace, useStore } from "@/lib/store";
 
 type State = ReturnType<typeof useStore>;
@@ -100,23 +100,26 @@ function Tree({ node, path, file, open, onToggle }: TreeProps) {
 /* Folders start closed; the ones opened are remembered per workspace in this browser. */
 function useOpenFolders(root: string | null) {
   const [open, setOpen] = useState<Set<string>>(new Set());
+  const latest = useRef(open);  // two toggles can land before the next render
   const key = "pdf-marker-open:" + root;
+  const replace = (next: Set<string>) => {
+    latest.current = next;
+    setOpen(next);
+  };
   useEffect(() => {
     try {
-      setOpen(new Set(JSON.parse(read(key) ?? "[]")));
+      replace(new Set(JSON.parse(read(key) ?? "[]")));
     } catch {
-      setOpen(new Set());
+      replace(new Set());
     }
   }, [key]);
   const toggle = (path: string, isOpen: boolean) => {
-    setOpen((current) => {
-      if (current.has(path) === isOpen) return current;
-      const next = new Set(current);
-      if (isOpen) next.add(path);
-      else next.delete(path);
-      write(key, JSON.stringify([...next]));
-      return next;
-    });
+    if (latest.current.has(path) === isOpen) return;
+    const next = new Set(latest.current);
+    if (isOpen) next.add(path);
+    else next.delete(path);
+    write(key, JSON.stringify([...next]));  // now, not at the next render: a reload must not lose it
+    replace(next);
   };
   return { open, toggle };
 }
