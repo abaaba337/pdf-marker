@@ -30,7 +30,7 @@ Run the app with `start.cmd`, or `dev.cmd` for hot reload at http://127.0.0.1:30
 
 ## Before committing
 
-`README.zh-CN.md` mirrors `README.md`: change both together.
+`README.md` holds English and Chinese in two `<details name="lang">` blocks, so opening one closes the other: change both together.
 
 Only the owner pushes to `main`. Anyone else goes through a pull request the owner approves: a GitHub ruleset enforces this, and `.github/CODEOWNERS` names whose approval counts.
 
