@@ -1,12 +1,9 @@
-import { type PointerEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { References } from "./References";
+import { Resizer, SIDEBAR } from "./Resizer";
 import { type FileRow, type Group, openFile, pickWorkspace, useStore } from "@/lib/store";
 
 type State = ReturnType<typeof useStore>;
-
-const MIN_WIDTH = 200;
-const MAX_WIDTH = 600;
-const DEFAULT_WIDTH = 272;
-const WIDTH_KEY = "pdf-marker-sidebar";
 
 function read(key: string) {
   try {
@@ -20,22 +17,8 @@ function write(key: string, value: string) {
   try {
     localStorage.setItem(key, value);
   } catch {
-    /* private window: this just resets next time */
+    /* private window: the tree just starts closed next time */
   }
-}
-
-export function useSidebarWidth() {
-  const [width, setRaw] = useState(DEFAULT_WIDTH);
-  useEffect(() => {
-    const saved = Number(read(WIDTH_KEY));
-    if (saved >= MIN_WIDTH && saved <= MAX_WIDTH) setRaw(saved);
-  }, []);
-  const setWidth = (next: number) => {
-    const clamped = Math.round(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, next)));
-    setRaw(clamped);
-    write(WIDTH_KEY, String(clamped));
-  };
-  return { width, setWidth };
 }
 
 interface Folder {
@@ -136,16 +119,6 @@ export function Sidebar({ state, width, onResize }: SidebarProps) {
   const { open, toggle } = useOpenFolders(root);
   const parts = root ? root.split(/[\\/]/).filter(Boolean) : [];
 
-  const startResize = (event: PointerEvent<HTMLDivElement>) => {
-    const handle = event.currentTarget;
-    const startX = event.clientX;
-    handle.setPointerCapture(event.pointerId);
-    handle.onpointermove = (move) => onResize(width + move.clientX - startX);
-    handle.onpointerup = () => {
-      handle.onpointermove = null;
-    };
-  };
-
   return (
     <aside>
       <div id="brand">PDF Marker</div>
@@ -156,19 +129,12 @@ export function Sidebar({ state, width, onResize }: SidebarProps) {
         </span>
         <span className="change">更换</span>
       </button>
+      {root && <References names={state.references} open={state.reference?.name} />}
       <div id="files">
         <Tree node={tree} path="" file={file} open={open} onToggle={toggle} />
         {loaded && root && !groups.length && <p className="none">这个文件夹下没有 PDF</p>}
       </div>
-      <div
-        id="resizer"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="调整侧栏宽度"
-        title="拖动调整宽度，双击恢复默认"
-        onPointerDown={startResize}
-        onDoubleClick={() => onResize(DEFAULT_WIDTH)}
-      />
+      <Resizer width={width} fallback={SIDEBAR.fallback} onResize={onResize} side="right" />
     </aside>
   );
 }

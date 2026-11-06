@@ -29,7 +29,36 @@ export interface Group {
   files: FileRow[];
 }
 
+export interface ClaudeNote {
+  kind: "note" | "thought" | "read";
+  text: string;
+}
+
+export interface ClaudeResult {
+  state: "idle" | "running" | "done" | "failed";
+  summary: string;
+  marks: Mark[];
+  log: ClaudeNote[];
+  draft: string;
+  error: string;
+  rejected: string[];
+}
+
+const NO_CLAUDE: ClaudeResult = { state: "idle", summary: "", marks: [], log: [], draft: "", error: "", rejected: [] };
+
+export type ReferenceView =
+  | { kind: "pages"; pages: { w: number; h: number }[] }
+  | { kind: "code"; text: string; language: string }
+  | { kind: "html"; text: string }
+  | { kind: "notebook"; cells: { type: string; source: string; output: string }[] };
+
 interface State {
+  reference: { name: string; view: ReferenceView } | null;
+  cancelling: boolean;
+  panelOpen: boolean;
+  references: string[];
+  instruction: string;
+  claude: ClaudeResult;
   root: string | null;
   groups: Group[];
   loaded: boolean;
@@ -49,6 +78,12 @@ interface State {
 }
 
 let state: State = {
+  reference: null,
+  cancelling: false,
+  panelOpen: true,
+  references: [],
+  instruction: "",
+  claude: NO_CLAUDE,
   root: null,
   groups: [],
   loaded: false,
@@ -57,7 +92,7 @@ let state: State = {
   marks: [],
   selected: null,
   tool: "select",
-  toolColor: { tick: "#1f9d55", cross: "#d92b2b", highlight: "#ffd400", text: "#d92b2b", circle: "#d92b2b", line: "#d92b2b" },
+  toolColor: { tick: "#1f9d55", cross: "#d92b2b", highlight: "#ffd400", text: "#d92b2b", circle: "#d92b2b", line: "#d92b2b", arrow: "#d92b2b" },
   zoom: 1,
   dirty: false,
   undo: [],
@@ -172,6 +207,7 @@ export function finishEditing() {
     commit(patchMark(id, { text: text.trimEnd() }), before, { editing: null, selected });
   } else {
     commit(state.marks.filter((m) => m.id !== id), before, { editing: null, selected: null });
+    rememberRejected([id]);
   }
 }
 
@@ -214,10 +250,11 @@ function newMark(type: MarkType, page: number, fields: object): Mark {
   const width = type === "tick" || type === "cross" ? STAMP_WIDTH : type === "highlight" ? undefined : LINE_WIDTH;
   return {
     id: crypto.randomUUID(),
-    type,
+    type: type === "arrow" ? "line" : type,
     page,
     color: state.toolColor[type],
     ...(width ? { width } : {}),
+    ...(type === "arrow" ? { arrow: true } : {}),
     ...fields,
   } as Mark;
 }
@@ -265,7 +302,7 @@ export function pointerMove(event: ReactPointerEvent<SVGSVGElement>) {
   const dy = p.y - gesture.start.y;
   if (gesture.kind === "draw") {
     const shape =
-      state.tool === "line"
+      state.tool === "line" || state.tool === "arrow"
         ? { x1: gesture.start.x, y1: gesture.start.y, x2: p.x, y2: p.y }
         : { x: Math.min(p.x, gesture.start.x), y: Math.min(p.y, gesture.start.y), w: Math.abs(dx), h: Math.abs(dy) };
     if (gesture.markId) {
@@ -335,6 +372,7 @@ export function deleteSelected() {
   commit(state.marks.filter((m) => m.id !== selected && !(m.type === "text" && m.anchor === selected)), state.marks, {
     selected: null,
   });
+  rememberRejected([selected]);
 }
 
 export function stepZoom(factor: number) {
@@ -402,10 +440,13 @@ export async function openFile(next: string) {
       undo: [],
       redo: [],
       dirty: false,
-      zoom: Math.min(1.6, (main.clientWidth - 88) / widest),  // padding + scrollbar
+      claude: NO_CLAUDE,
+      zoom: fitZoom(main, widest),
       status: { text: doc.marks.length ? `已载入 ${doc.marks.length} 处批注，可继续修改` : "", error: false },
     });
     main.scrollTop = 0;
+    void loadClaude();
+    void loadGuidance();
   } catch (error) {
     status("打不开这个文件：" + (error as Error).message, true);
   }
@@ -418,9 +459,190 @@ export async function pickWorkspace() {
     const result = await api<{ changed: boolean }>("/api/workspace", post({}));
     status("");
     if (!result.changed) return;
-    set({ file: null, pages: [], marks: [], selected: null, undo: [], redo: [] });
+    set({ file: null, pages: [], marks: [], selected: null, undo: [], redo: [], claude: NO_CLAUDE, reference: null });
     await loadTree();
+    await loadReferences();
   } catch (error) {
     status("选择失败：" + (error as Error).message, true);
   }
+}
+
+/* ---------- Claude ---------- */
+function fitZoom(main: HTMLElement, widest: number) {
+  // padding + scrollbar; below this the work is unreadable, so the page scrolls sideways instead
+  return Math.max(0.55, Math.min(1.6, (main.clientWidth - 88) / widest));
+}
+
+/* After a side column changes the space, once the layout has settled. */
+function refit() {
+  requestAnimationFrame(() => {
+    const main = document.getElementById("main");
+    if (main && state.pages.length) set({ zoom: fitZoom(main, Math.max(...state.pages.map((p) => p.w))) });
+  });
+}
+
+export function togglePanel() {
+  set({ panelOpen: !state.panelOpen });
+  refit();
+}
+
+export function setInstruction(instruction: string) {
+  set({ instruction });
+}
+
+const fileQuery = () => (state.file ? "file=" + encodeURIComponent(state.file) : "");
+
+export async function loadReferences() {
+  try {
+    const references = await api<string[]>("/api/reference");
+    set({ references });
+    if (state.reference && !references.includes(state.reference.name)) closeReference();
+  } catch {
+    set({ references: [] });
+  }
+}
+
+export async function uploadReferences(files: File[]) {
+  for (const file of files) {
+    const url = `/api/reference?name=${encodeURIComponent(file.name)}`;
+    try {
+      await api(url, { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file });
+    } catch (error) {
+      status(`${file.name} 上传失败：${(error as Error).message}`, true);
+    }
+  }
+  await loadReferences();
+}
+
+export async function openReference(name: string) {
+  try {
+    const url = "/api/reference/view?name=" + encodeURIComponent(name);
+    set({ reference: { name, view: await api<ReferenceView>(url) } });
+    refit();
+  } catch (error) {
+    status(`打不开 ${name}：${(error as Error).message}`, true);
+  }
+}
+
+export function closeReference() {
+  set({ reference: null });
+  refit();
+}
+
+export const referencePage = (name: string, n: number) =>
+  `/api/reference/page?name=${encodeURIComponent(name)}&n=${n}&w=1400`;
+
+export async function removeReference(name: string) {
+  await api("/api/reference/delete", post({ name }));
+  await loadReferences();
+}
+
+let poll: ReturnType<typeof setTimeout> | undefined;
+
+async function loadClaude() {
+  const { file } = state;
+  clearTimeout(poll);
+  if (!file) return;
+  const claude = await api<ClaudeResult>("/api/claude?file=" + encodeURIComponent(file));
+  if (file !== state.file) return;
+  const seen = state.claude.marks.length;
+  set({ claude, cancelling: claude.state === "running" && state.cancelling });
+  mergeClaude();
+  if (claude.state !== "running") return;
+  poll = setTimeout(() => void loadClaude(), 600);
+  const newest = claude.marks.at(-1);
+  if (newest && claude.marks.length > seen) followPage(newest.page);
+}
+
+/* Bring the page Claude has reached into view, without fighting the reader within a page. */
+let followed = -1;
+
+function followPage(page: number) {
+  if (page === followed) return;
+  followed = page;
+  document.querySelector(`.page[data-n="${page}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+export async function loadGuidance() {
+  try {
+    const { text } = await api<{ text: string }>("/api/guidance?" + fileQuery());
+    set({ instruction: text });
+  } catch {
+    set({ instruction: "" });
+  }
+}
+
+export async function saveGuidance() {
+  await api("/api/guidance", post({ file: state.file, text: state.instruction }));
+}
+
+export async function startClaude() {
+  if (!state.file) return;
+  followed = -1;
+  await saveGuidance();
+  const others = state.marks.filter((mark) => !mark.fromClaude);
+  if (others.length < state.marks.length) commit(others);  // a new run replaces the last one; undo brings it back
+  set({ claude: { ...NO_CLAUDE, state: "running" } });
+  try {
+    await api("/api/claude/mark", post({ file: state.file }));
+    await loadClaude();
+  } catch (error) {
+    set({ claude: { ...NO_CLAUDE, state: "failed", error: (error as Error).message } });
+  }
+}
+
+export async function cancelClaude() {
+  set({ cancelling: true });
+  await api("/api/claude/cancel", post({ file: state.file }));
+  await loadClaude();
+}
+
+/* A mark and the note attached to it stand or fall together. */
+const belongsTo = (mark: Mark, id: string) => mark.id === id || (mark.type === "text" && mark.anchor === id);
+
+function standing({ marks, rejected }: ClaudeResult) {
+  return marks.filter((mark) => !rejected.some((id) => belongsTo(mark, id)));
+}
+
+const isRow = (mark: Mark) => !(mark.type === "text" && mark.anchor);
+
+/* Claude's marks count from the moment they arrive: they are ordinary marks, and go if deleted. */
+function mergeClaude() {
+  const added = standing(state.claude)
+    .filter((mark) => !markById(mark.id))
+    .map((mark) => ({ ...mark, fromClaude: true }));
+  if (added.length) {
+    set({ marks: [...state.marks, ...added], dirty: true, status: { text: "有未保存的修改", error: false } });
+  }
+}
+
+function setRejected(rejected: string[]) {
+  set({ claude: { ...state.claude, rejected } });
+  void api("/api/claude/reject", post({ file: state.file, ids: rejected }));
+}
+
+/* A deleted mark of Claude's stays deleted, or the next update would bring it back. */
+function rememberRejected(ids: string[]) {
+  const known = new Set(state.claude.marks.map((mark) => mark.id));
+  const added = ids.filter((id) => known.has(id) && !state.claude.rejected.includes(id));
+  if (added.length) setRejected([...state.claude.rejected, ...added]);
+}
+
+export function deleteClaudeMark(id: string) {
+  const gone = markById(state.selected);
+  commit(state.marks.filter((mark) => !belongsTo(mark, id)), state.marks, {
+    selected: gone && belongsTo(gone, id) ? null : state.selected,
+  });
+  rememberRejected([id]);
+}
+
+export function deleteAllClaude() {
+  const ids = state.marks.filter((mark) => mark.fromClaude && isRow(mark)).map((mark) => mark.id);
+  commit(state.marks.filter((mark) => !mark.fromClaude));
+  rememberRejected(ids);
+}
+
+export function restoreMark(id: string) {
+  setRejected(state.claude.rejected.filter((item) => item !== id));
+  mergeClaude();
 }

@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import type { Tool } from "@/lib/marks";
-import { deleteSelected, redo, save, setColor, setTool, undo, useStore } from "@/lib/store";
+import { deleteSelected, redo, save, setColor, setTool, togglePanel, undo, useStore } from "@/lib/store";
 
 type State = ReturnType<typeof useStore>;
 
@@ -22,6 +22,7 @@ export const TOOLS: { name: Tool; label: string; key: string; icon: ReactNode }[
   { name: "text", label: "批注", key: "4", icon: <path d="M4 5h16v11H10l-4 4v-4H4z" /> },
   { name: "circle", label: "画圈", key: "5", icon: <ellipse cx="12" cy="12" rx="9" ry="7" /> },
   { name: "line", label: "划线", key: "6", icon: <path d="M4 19L20 5" /> },
+  { name: "arrow", label: "箭头", key: "7", icon: <path d="M4 20L20 4M10 4h10v10" /> },
 ];
 
 const COLORS = ["#d92b2b", "#1f9d55", "#2563eb", "#ffd400"];
@@ -91,6 +92,14 @@ export function Toolbar({ state }: { state: State }) {
         </button>
         <button id="save" title="Ctrl+S" disabled={!state.file || !state.dirty} onClick={() => void save()}>
           保存
+        </button>
+        <button
+          id="claudeToggle"
+          className={state.panelOpen ? "on" : ""}
+          title="打开或关闭 Claude 面板"
+          onClick={togglePanel}
+        >
+          Claude
         </button>
       </div>
     </header>

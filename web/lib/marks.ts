@@ -1,10 +1,11 @@
-export type Tool = "select" | "tick" | "cross" | "highlight" | "text" | "circle" | "line";
+export type Tool = "select" | "tick" | "cross" | "highlight" | "text" | "circle" | "line" | "arrow";
 export type MarkType = Exclude<Tool, "select">;
 
 interface Base {
   id: string;
   page: number;
   color: string;
+  fromClaude?: boolean;  // gets a delete button on the page
 }
 
 export interface Box {
@@ -34,6 +35,7 @@ export interface BoxMark extends Base, Box {
 export interface LineMark extends Base, Ends {
   type: "line";
   width: number;
+  arrow?: boolean;  // a head at the x2, y2 end
 }
 
 export interface NoteMark extends Base, Box {
@@ -54,7 +56,7 @@ export const MIN_DRAG = 5;
 export const NOTE_WIDTH = 190;
 export const NOTE_SIZE = 11;
 export const NOTE_GAP = 24;
-export const NOTE_AFTER = new Set<MarkType>(["cross", "circle", "line"]);
+export const NOTE_AFTER = new Set<string>(["cross", "circle", "line", "arrow"]);
 
 export function bounds(mark: Mark): Box {
   if (mark.type !== "line") return { x: mark.x, y: mark.y, w: mark.w, h: mark.h };

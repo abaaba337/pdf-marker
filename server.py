@@ -6,7 +6,8 @@ which is how the site reopens a saved file with every mark still editable.
 Annotations made by other tools are left alone.
 
 Files stay on this machine: the server listens on 127.0.0.1 only and the page
-loads nothing from the internet.
+loads nothing from the internet. The one exception is the Claude button: see
+claude_marker.py.
 """
 import argparse
 import base64
@@ -20,6 +21,8 @@ from urllib.parse import parse_qs, urlparse
 
 import fitz
 
+import claude_marker
+
 KEY = "MarkerData"
 LEADER_KEY = "MarkerLeader"  # thin line from a mark to its note; rebuilt from the note on save
 HERE = Path(__file__).resolve().parent
@@ -28,6 +31,12 @@ CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", 
                  ".txt": "text/plain; charset=utf-8", ".json": "application/json",
                  ".svg": "image/svg+xml", ".woff2": "font/woff2"}
 CONFIG = Path.home() / ".pdf-marker.json"  # remembers the last workspace
+PAGED_TYPES = {".pdf", ".docx"}  # PyMuPDF lays these out as pages
+HTML_TYPES = {".html", ".htm"}
+CODE_TYPES = {".py", ".ipynb", ".tex", ".md", ".txt", ".m", ".r", ".jl", ".c", ".h", ".cpp", ".hpp", ".java",
+              ".js", ".ts", ".json", ".css", ".sh", ".f90", ".rs", ".go"}
+REFERENCE_TYPES = PAGED_TYPES | HTML_TYPES | CODE_TYPES
+MAX_UPLOAD = 50_000_000
 NOTE_FILL = (0.984, 0.953, 0.859)  # same pale yellow as the page
 TEXT_PAD = 8  # room PyMuPDF keeps inside a text box, in points
 SHAPES = {
@@ -101,6 +110,8 @@ def add_mark(doc, page, mark):
         annot = page.add_ink_annot(strokes)
     elif kind == "line":
         annot = page.add_line_annot(point(mark["x1"], mark["y1"]), point(mark["x2"], mark["y2"]))
+        if mark.get("arrow"):
+            annot.set_line_ends(fitz.PDF_ANNOT_LE_NONE, fitz.PDF_ANNOT_LE_CLOSED_ARROW)
     else:
         height = max(mark["h"], text_height(mark)) if kind == "text" else mark["h"]
         left, top, right, bottom = mark["x"], mark["y"], mark["x"] + mark["w"], mark["y"] + height
@@ -119,7 +130,7 @@ def add_mark(doc, page, mark):
         else:
             raise ValueError(f"unknown mark type: {kind}")
     if kind != "text":
-        annot.set_colors(stroke=color)
+        annot.set_colors(stroke=color, fill=color if mark.get("arrow") else None)  # a solid head
     if kind in SHAPES or kind in ("line", "circle"):
         annot.set_border(width=mark.get("width", 2))
     annot.set_info(title="Marker")
@@ -206,6 +217,57 @@ class Workspace:
         return {"root": str(self.root),
                 "groups": [{"dir": d, "files": f} for d, f in groups.items()]}
 
+    def folder_of(self, rel):
+        """The folder of an open file, or the workspace itself when nothing is open."""
+        if not self.root:
+            raise ValueError("no workspace chosen")
+        return self.resolve(rel).parent if rel else self.root
+
+    def reference_place(self):
+        """Reference answers belong to the whole workspace, so one upload serves every submission."""
+        if not self.root:
+            raise ValueError("no workspace chosen")
+        return self.root / ".marker" / "reference"
+
+    def references(self):
+        place = self.reference_place()
+        if not place.is_dir():
+            return []
+        return sorted(p for p in place.iterdir() if p.suffix.lower() in REFERENCE_TYPES)
+
+    def add_reference(self, name, data):
+        name = Path(name).name
+        if Path(name).suffix.lower() not in REFERENCE_TYPES:
+            raise ValueError("只支持 PDF、Word（docx）、HTML 和常见代码文件")
+        place = self.reference_place()
+        place.mkdir(parents=True, exist_ok=True)
+        (place / name).write_bytes(data)
+
+    def remove_reference(self, name):
+        self.reference(name).unlink()
+
+    def guidance(self, rel):
+        """The teacher's marking rules: the nearest ones above the file win."""
+        folder = self.folder_of(rel)
+        while True:
+            path = folder / ".marker" / "guidance.md"
+            if path.is_file():
+                return path.read_text(encoding="utf-8")
+            if folder == self.root:
+                return ""
+            folder = folder.parent
+
+    def save_guidance(self, rel, text):
+        place = self.folder_of(rel) / ".marker"
+        place.mkdir(exist_ok=True)
+        (place / "guidance.md").write_text(text, encoding="utf-8")
+
+    def reference(self, name):
+        for path in self.references():
+            if path.name == name:
+                return path
+        raise ValueError("no such reference")
+
     def resolve(self, rel):
         if not self.root:
             raise ValueError("no workspace chosen")
@@ -216,8 +278,56 @@ class Workspace:
         return path
 
 
+def notebook_cells(text):
+    cells = []
+    for cell in json.loads(text).get("cells", []):
+        output = []
+        for item in cell.get("outputs", []):
+            data = item.get("data", {})
+            output.append("".join(item.get("text") or data.get("text/plain") or []))
+        cells.append({"type": cell.get("cell_type"), "source": "".join(cell.get("source", [])),
+                      "output": "\n".join(part for part in output if part)})
+    return cells
+
+
+def reference_view(path):
+    """What the read-only pane needs to show a reference answer."""
+    suffix = path.suffix.lower()
+    if suffix in PAGED_TYPES:
+        with fitz.open(path) as doc:
+            return {"kind": "pages", "pages": [{"w": p.rect.width, "h": p.rect.height} for p in doc]}
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if suffix in HTML_TYPES:
+        return {"kind": "html", "text": text}
+    if suffix == ".ipynb":
+        return {"kind": "notebook", "cells": notebook_cells(text)}
+    return {"kind": "code", "text": text, "language": suffix[1:]}
+
+
+def reference_for_claude(path):
+    """Claude's Read tool can't open Word files, so it gets their text."""
+    suffix = path.suffix.lower()
+    if suffix != ".docx":
+        return suffix, path.read_bytes()
+    with fitz.open(path) as doc:
+        return ".txt", "\n".join(page.get_text() for page in doc).encode("utf-8")
+
+
+def start_marking(workspace, jobs, rel, instruction):
+    pdf = workspace.resolve(rel)
+    with fitz.open(pdf) as doc:
+        for page in doc:
+            strip_marks(doc, page)  # Claude marks independently: it must not see the teacher's marks
+        lines = claude_marker.page_lines(doc)
+        pages = [{"w": p.rect.width, "h": p.rect.height} for p in doc]
+        data = doc.tobytes()
+    references = [reference_for_claude(path) for path in workspace.references()]
+    jobs.start(pdf, data, lines, pages, references, instruction)
+
+
 class Handler(BaseHTTPRequestHandler):
     workspace = None
+    jobs = claude_marker.Jobs()
     ui_port = None  # the Next.js development server, when one is proxying to this server
 
     def log_message(self, *args):
@@ -252,6 +362,19 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if url.path == "/api/tree":
                 self.reply(self.workspace.tree())
+            elif url.path == "/api/reference":
+                self.reply([p.name for p in self.workspace.references()])
+            elif url.path == "/api/guidance":
+                self.reply({"text": self.workspace.guidance(args.get("file"))})
+            elif url.path == "/api/reference/view":
+                self.reply(reference_view(self.workspace.reference(args["name"])))
+            elif url.path == "/api/reference/page":
+                with fitz.open(self.workspace.reference(args["name"])) as doc:
+                    page = doc[int(args["n"])]
+                    zoom = min(3, max(1, float(args["w"]) / page.rect.width))
+                    self.reply(page.get_pixmap(matrix=fitz.Matrix(zoom, zoom)).tobytes("png"), "image/png")
+            elif url.path == "/api/claude":
+                self.reply(self.jobs.status(self.workspace.resolve(args["file"])))
             elif url.path == "/api/doc":
                 with fitz.open(self.workspace.resolve(args["file"])) as doc:
                     pages = [{"w": p.rect.width, "h": p.rect.height} for p in doc]
@@ -273,12 +396,36 @@ class Handler(BaseHTTPRequestHandler):
             self.reply({"error": str(error)}, status=400)
 
     def do_POST(self):
-        if not self.allowed() or self.headers.get("Content-Type") != "application/json":
+        url = urlparse(self.path)
+        kind = "application/octet-stream" if url.path == "/api/reference" else "application/json"
+        if not self.allowed() or self.headers.get("Content-Type") != kind:
             return self.reply({"error": "forbidden"}, status=403)
         try:
             length = int(self.headers.get("Content-Length") or 0)
-            body = json.loads(self.rfile.read(length) or "{}")
-            if self.path == "/api/workspace":
+            if length > MAX_UPLOAD:
+                return self.reply({"error": "文件太大"}, status=413)
+            raw = self.rfile.read(length)
+            if url.path == "/api/reference":
+                args = {k: v[0] for k, v in parse_qs(url.query).items()}
+                self.workspace.add_reference(args["name"], raw)
+                return self.reply({"ok": True})
+            body = json.loads(raw or "{}")
+            if self.path == "/api/reference/delete":
+                self.workspace.remove_reference(body["name"])
+                self.reply({"ok": True})
+            elif self.path == "/api/claude/mark":
+                start_marking(self.workspace, self.jobs, body["file"], self.workspace.guidance(body["file"]).strip())
+                self.reply({"ok": True})
+            elif self.path == "/api/guidance":
+                self.workspace.save_guidance(body.get("file"), str(body["text"]))
+                self.reply({"ok": True})
+            elif self.path == "/api/claude/reject":
+                self.jobs.reject(self.workspace.resolve(body["file"]), [str(item) for item in body["ids"]])
+                self.reply({"ok": True})
+            elif self.path == "/api/claude/cancel":
+                self.jobs.cancel(self.workspace.resolve(body["file"]))
+                self.reply({"ok": True})
+            elif self.path == "/api/workspace":
                 chosen = pick_folder(self.workspace.root)
                 if chosen:
                     self.workspace.choose(chosen)

@@ -64,22 +64,33 @@ test("the tree nests folders, starts closed and sorts numbers naturally", async 
   await expect(page.locator(".file", { hasText: "nested.pdf" })).toBeVisible();
 });
 
-test("the sidebar resizes, remembers its width and resets", async ({ page }) => {
-  await page.goto("/");
-  const aside = page.locator("aside");
-  const width = async () => (await aside.boundingBox())!.width;
-  const edge = (await page.locator("#resizer").boundingBox())!;
-  const x = edge.x + 4;
-  expect(await width()).toBe(272);
-  await drag(page, [x, 300], [x + 120, 300]);
-  expect(await width()).toBe(392);
-  await page.reload();
-  await expect.poll(width).toBe(392);
-  await drag(page, [x + 120, 300], [x - 400, 300]);
-  expect(await width()).toBe(200);
-  const narrow = (await page.locator("#resizer").boundingBox())!;
-  await page.mouse.dblclick(narrow.x + 4, 300);
-  await expect.poll(width).toBe(272);
+test("both side panels resize, remember their width and reset", async ({ page }) => {
+  const cases = [
+    { panel: "aside:not(#panel)", normal: 272, drag: 120, least: 200 },
+    { panel: "#panel", normal: 340, drag: -120, least: 260 },
+  ];
+  for (const { panel, normal, drag: move, least } of cases) {
+    await page.goto("/");
+    await expect(page.locator(panel)).toBeVisible();
+    const width = async () => Math.round((await page.locator(panel).boundingBox())!.width);
+    await expect.poll(width).toBe(normal);
+    const edge = async () => {
+      const box = (await page.locator(`${panel} .resizer`).boundingBox())!;
+      return box.x + 4;
+    };
+    const x = await edge();
+    await drag(page, [x, 300], [x + move, 300]);
+    expect(await width()).toBe(normal + Math.abs(move));
+    await page.reload();
+    await expect.poll(width).toBe(normal + Math.abs(move));
+    const wide = await edge();
+    await drag(page, [wide, 300], [wide - Math.sign(move) * 500, 300]);
+    expect(await width()).toBe(least);
+    await page.mouse.dblclick(await edge(), 300);
+    await expect.poll(width).toBe(normal);
+    const box = (await page.locator(panel).boundingBox())!;
+    expect(box.x + box.width).toBeLessThanOrEqual(1360);
+  }
 });
 
 test("a cross opens a linked box and the next click carries on", async ({ page }) => {
@@ -141,6 +152,22 @@ test("a note drags while typing and under a drawing tool", async ({ page }) => {
   await page.keyboard.press("Enter");
 });
 
+test("an arrow opens a linked box and keeps its head after saving", async ({ page }) => {
+  await openFile(page, "later.pdf", "Sheet 10");
+  await page.keyboard.press("7");
+  await drag(page, await pagePoint(page, 100, 200), await pagePoint(page, 240, 260));
+  await expect(editor(page)).toBeFocused();
+  await page.keyboard.type("look here");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("polygon.head")).toHaveCount(1);
+  await expect(leaders(page)).toHaveCount(1);
+  await saved(page);
+
+  await openFile(page, "later.pdf", "Sheet 10");
+  await expect(page.locator("polygon.head")).toHaveCount(1);
+  await expect(marks(page)).toHaveCount(2);
+});
+
 test("saved marks reopen editable and a mark takes its note with it", async ({ page }) => {
   await openFile(page, "reopen.pdf", "Sheet 1");
   await page.keyboard.press("5");
@@ -175,6 +202,155 @@ test("saved marks reopen editable and a mark takes its note with it", async ({ p
 
   await page.locator(".file", { hasText: "drag.pdf" }).click();  // switching files saves
   await expect(page.locator(".file", { hasText: "reopen.pdf" }).locator(".badge")).toHaveText("3");
+});
+
+test("Claude's marks arrive as ordinary marks, edit like them, and can be deleted", async ({ page }) => {
+  const remove = page.locator(".claudeDelete button");
+  await openFile(page, "claude.pdf", "Sheet 1");
+  await expect(page.locator("#panel")).toBeVisible();  // open from the start
+  await page.locator("#referenceInput").setInputFiles({
+    name: "answer.py",
+    mimeType: "text/plain",
+    buffer: Buffer.from("print('answer')"),
+  });
+  await expect(page.locator("#references .row", { hasText: "answer.py" })).toBeVisible();
+
+  await page.getByRole("button", { name: "让 Claude 批改" }).click();
+
+  // live: the first marks and notes are on the page while Claude is still working
+  await expect(marks(page).first()).toBeVisible();
+  await expect(page.locator(".thinking", { hasText: "正在看第 1 处" })).toBeVisible();
+  await expect(page.locator(".thinking", { hasText: "读取 submission.pdf" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "批改中，点此取消" })).toBeVisible();
+
+  await expect(page.getByText("Reference seen.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "重新批改" })).toBeVisible();
+  await expect(page.locator(".page")).toHaveCount(2);  // one copy of the work, no second column
+  await expect(marks(page)).toHaveCount(8);  // a kind that is not on the toolbar is dropped
+  await expect(page.locator("polygon.head")).toHaveCount(1);
+  await expect(remove).toHaveCount(5);  // one per mark, with its note
+
+  // every delete button sits on the top right corner of its mark or note
+  const note = page.locator(".page .note", { hasText: "Check this sign." });
+  const corner = (await note.boundingBox())!;
+  const button = (await remove.nth(1).boundingBox())!;
+  expect(Math.abs(button.x + button.width / 2 - (corner.x + corner.width))).toBeLessThan(4);
+  expect(Math.abs(button.y + button.height / 2 - corner.y)).toBeLessThan(4);
+
+  // Claude's marks drag and edit like any other
+  await drag(page, [corner.x + 30, corner.y + 6], [corner.x + 90, corner.y + 12]);
+  const moved = (await note.boundingBox())!;
+  expect(Math.round(moved.x - corner.x)).toBe(60);
+  await page.mouse.dblclick(moved.x + 30, moved.y + 6);
+  await expect(editor(page)).toBeFocused();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type(" Edited");
+  await page.keyboard.press("Enter");
+  const edited = page.locator(".page .note", { hasText: "Check this sign. Edited" });
+  await expect(edited).toBeVisible();
+
+  await remove.nth(2).click();  // the circle and its note go
+  await expect(marks(page)).toHaveCount(6);
+  const circle = page.locator(".proposal", { hasText: "Say why this holds." });
+  await expect(circle).toHaveClass(/rejected/);
+  await saved(page);
+  await expect(page.locator("#status")).toContainText("6");  // what is left is in the PDF
+
+  await openFile(page, "claude.pdf", "Sheet 1");
+  await expect(marks(page)).toHaveCount(6);
+  await expect(edited).toBeVisible();
+  await expect(remove).toHaveCount(4);
+  await expect(page.getByText("Reference seen.")).toBeVisible();
+  await expect(page.locator(".thinking", { hasText: "正在看第 5 处" })).toBeVisible();
+  await expect(circle).toHaveClass(/rejected/);  // a deleted mark doesn't come back
+
+  await circle.getByRole("button", { name: "恢复" }).click();
+  await expect(marks(page)).toHaveCount(8);
+
+  // a new run replaces the last one instead of doubling it
+  await page.getByRole("button", { name: "重新批改" }).click();
+  await expect(page.getByRole("button", { name: "批改中，点此取消" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "重新批改" })).toBeVisible({ timeout: 10000 });
+  await expect(marks(page)).toHaveCount(8);
+
+  await page.getByRole("button", { name: "全部删除" }).click();
+  await expect(marks(page)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "全部删除" })).toBeDisabled();
+});
+
+test("marking rules are kept for the folder and reach Claude", async ({ page }) => {
+  await openFile(page, "later.pdf", "Sheet 10");
+  const rules = page.locator("#panel textarea");
+  await rules.fill("Use the lecturer's notation.");
+  await page.getByRole("button", { name: "让 Claude 批改" }).click();
+  await expect(page.getByText("Rules seen.")).toBeVisible();
+
+  await page.reload();
+  await expect(page.locator("#empty h1")).toBeVisible();
+  await page.locator(".file", { hasText: "later.pdf" }).click();
+  await expect(rules).toHaveValue("Use the lecturer's notation.");
+});
+
+test("cancelling stops Claude straight away", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".file", { hasText: "rotated.pdf" }).click();
+  await expect(page.locator('.page[data-n="1"]')).toBeVisible();
+  await page.getByRole("button", { name: "让 Claude 批改" }).click();
+  await expect(marks(page).first()).toBeVisible();
+  await page.getByRole("button", { name: "批改中，点此取消" }).click();
+  await expect(page.getByRole("button", { name: "让 Claude 批改" })).toBeVisible({ timeout: 2000 });
+  await page.waitForTimeout(800);
+  await expect(page.getByRole("button", { name: "让 Claude 批改" })).toBeVisible();  // and it stays stopped
+});
+
+test("reference answers open read-only in their own column", async ({ page }) => {
+  await openFile(page, "nested.pdf", "Sheet 2", "Sheet 2/deep");
+  const pane = page.locator("#reference");
+  const upload = (name: string, text: string) =>
+    page.locator("#referenceInput").setInputFiles({ name, mimeType: "text/plain", buffer: Buffer.from(text) });
+
+  const open = (name: string) => page.locator(".referenceName", { hasText: name }).click();
+
+  await upload("key.py", "def f(x):\n    return x + 1\n");
+  await expect(page.locator("#references .row", { hasText: "key.py" })).toBeVisible();
+  await expect(pane).toHaveCount(0);  // uploading doesn't open the column
+  await open("key.py");
+  await expect(pane).toContainText("key.py");
+  await expect(pane.locator("pre .hljs-keyword").first()).toHaveText("def");
+  await expect(pane.locator("textarea, input, [contenteditable]")).toHaveCount(0);
+
+  await upload("answer.html", "<h1>Result</h1><script>document.title = 'ran'</script>");
+  await expect(page.locator("#references .row", { hasText: "answer.html" })).toBeVisible();
+  await open("answer.html");
+  await expect(pane.frameLocator("iframe").locator("h1")).toHaveText("Result");
+  await expect(pane.locator("iframe")).toHaveAttribute("sandbox", "");
+  await expect(page).toHaveTitle("PDF Marker");
+
+  await upload("notes.ipynb", JSON.stringify({ cells: [
+    { cell_type: "markdown", source: ["# Plan"], outputs: [] },
+    { cell_type: "code", source: ["print(1)"], outputs: [{ text: ["1"] }] },
+  ] }));
+  await expect(page.locator("#references .row", { hasText: "notes.ipynb" })).toBeVisible();
+  await open("notes.ipynb");
+  await expect(pane.locator(".cell.markdown")).toContainText("Plan");
+  await expect(pane.locator(".cell .output")).toHaveText("1");
+
+  await page.locator(".referenceName", { hasText: "key.py" }).click();
+  await expect(pane.locator("pre .hljs-keyword").first()).toBeVisible();
+
+  // one upload for the whole workspace: the column stays while moving between submissions
+  await page.locator(".file", { hasText: "rotated.pdf" }).click();
+  await expect(page.locator(".file.on")).toContainText("rotated.pdf");
+  await expect(pane.locator("pre .hljs-keyword").first()).toBeVisible();
+  await expect(page.locator("#references .row", { hasText: "key.py" })).toBeVisible();
+  await openFolders(page, "Sheet 1");
+  await page.locator(".file", { hasText: "drag.pdf" }).click();
+  await expect(page.locator(".file.on")).toContainText("drag.pdf");
+  await expect(pane).toContainText("key.py");
+
+  await page.getByRole("button", { name: "关闭参考答案" }).click();
+  await expect(pane).toHaveCount(0);
+  await expect(page.locator(".page[data-n=\"0\"]")).toBeVisible();
 });
 
 test("the API refuses other sites", async ({ request }) => {

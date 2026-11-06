@@ -1,6 +1,7 @@
 import { type PointerEvent, useEffect, useLayoutEffect, useRef } from "react";
 import { type Mark, type NoteMark, LEADER_WIDTH, bounds, leaderEnds } from "@/lib/marks";
 import {
+  deleteClaudeMark,
   doubleClick,
   finishEditing,
   moveNote,
@@ -22,6 +23,14 @@ function stampPath(m: { type: string; x: number; y: number; w: number; h: number
   return m.type === "tick" ? `M${at(0, 0.55)}L${at(0.35, 1)}L${at(1, 0)}` : `M${at(0, 0)}L${at(1, 1)}M${at(1, 0)}L${at(0, 1)}`;
 }
 
+function arrowHead(m: { x1: number; y1: number; x2: number; y2: number; width: number }) {
+  const angle = Math.atan2(m.y2 - m.y1, m.x2 - m.x1);
+  const size = 4 + m.width * 2;
+  const wing = (side: number) =>
+    `${m.x2 - size * Math.cos(angle + side)},${m.y2 - size * Math.sin(angle + side)}`;
+  return `${m.x2},${m.y2} ${wing(0.45)} ${wing(-0.45)}`;
+}
+
 function Shape({ mark }: { mark: Exclude<Mark, NoteMark> }) {
   const stroke = {
     stroke: mark.color,
@@ -39,6 +48,7 @@ function Shape({ mark }: { mark: Exclude<Mark, NoteMark> }) {
       <>
         <line {...ends} {...HIT} />
         <line {...ends} {...stroke} />
+        {mark.arrow && <polygon className="head" points={arrowHead(mark)} fill={mark.color} />}
       </>
     );
   }
@@ -164,6 +174,24 @@ function Handles({ mark, zoom }: { mark: Mark; zoom: number }) {
   );
 }
 
+/* On the top right corner of the mark, or of its note. Fixed size on screen, whatever the zoom. */
+function DeleteButton({ mark, note, zoom }: { mark: Mark; note?: Mark; zoom: number }) {
+  const box = bounds(note ?? mark);
+  return (
+    <foreignObject x={box.x + box.w - 9 / zoom} y={box.y - 9 / zoom} width={18 / zoom} height={18 / zoom}>
+      <div
+        className="claudeDelete"
+        style={{ transform: `scale(${1 / zoom})` }}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <button aria-label="删除这条批注" title="删除" onClick={() => deleteClaudeMark(mark.id)}>
+          ×
+        </button>
+      </div>
+    </foreignObject>
+  );
+}
+
 interface Props {
   n: number;
   page: { w: number; h: number };
@@ -212,6 +240,16 @@ export function PageCanvas({ n, page, state }: Props) {
           </g>
         ))}
         {current && editing !== current.id && <Handles mark={current} zoom={zoom} />}
+        {here.map((m) =>
+          m.fromClaude && !(m.type === "text" && m.anchor) && editing !== m.id ? (
+            <DeleteButton
+              key={m.id}
+              mark={m}
+              note={here.find((other) => other.type === "text" && other.anchor === m.id)}
+              zoom={zoom}
+            />
+          ) : null,
+        )}
       </svg>
     </div>
   );

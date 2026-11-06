@@ -8,6 +8,7 @@ import fitz
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import claude_marker  # noqa: E402
 import server  # noqa: E402
 
 PORT = "8799"
@@ -15,6 +16,7 @@ FILES = [
     "Sheet 1/flow.pdf",
     "Sheet 1/drag.pdf",
     "Sheet 1/reopen.pdf",
+    "Sheet 1/claude.pdf",
     "Sheet 2/deep/nested.pdf",
     "Sheet 10/later.pdf",
     "rotated.pdf",
@@ -34,6 +36,7 @@ def write_pdf(path, rotation=0):
 
 
 def main():
+    claude_marker.COMMAND = [sys.executable, str(ROOT / "scripts" / "fake_claude.py")]
     root = Path(tempfile.mkdtemp(prefix="pdf-marker-e2e-"))
     for name in FILES:
         write_pdf(root / name, rotation=90 if name == "rotated.pdf" else 0)

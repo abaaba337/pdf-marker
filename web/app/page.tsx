@@ -1,19 +1,24 @@
 "use client";
 
 import { type CSSProperties, useEffect } from "react";
+import { ClaudePanel } from "@/components/ClaudePanel";
 import { EmptyState } from "@/components/EmptyState";
 import { PageCanvas } from "@/components/PageCanvas";
-import { Sidebar, useSidebarWidth } from "@/components/Sidebar";
+import { ReferencePane } from "@/components/ReferencePane";
+import { PANEL, REFERENCE, SIDEBAR, useWidth } from "@/components/Resizer";
+import { Sidebar } from "@/components/Sidebar";
 import { TOOLS, Toolbar } from "@/components/Toolbar";
 import { ZoomControl } from "@/components/ZoomControl";
-import { deleteSelected, loadTree, redo, save, setTool, undo, useStore } from "@/lib/store";
+import { deleteSelected, loadReferences, loadTree, redo, save, setTool, undo, useStore } from "@/lib/store";
 
 export default function Home() {
   const state = useStore();
-  const { width, setWidth } = useSidebarWidth();
+  const sidebar = useWidth(SIDEBAR);
+  const panel = useWidth(PANEL);
+  const referenceWidth = useWidth(REFERENCE);
 
   useEffect(() => {
-    void loadTree();
+    void loadTree().then(loadReferences);
   }, []);
 
   useEffect(() => {
@@ -55,16 +60,27 @@ export default function Home() {
   }, [state.dirty]);
 
   return (
-    <div className="app" style={{ "--sidebar": `${width}px` } as CSSProperties}>
-      <Sidebar state={state} width={width} onResize={setWidth} />
+    <div
+      className="app"
+      style={
+        {
+          "--sidebar-width": `${sidebar.width}px`,
+          "--reference-width": `${state.reference ? referenceWidth.width : 0}px`,
+          "--panel-width": `${state.panelOpen ? panel.width : 0}px`,
+        } as CSSProperties
+      }
+    >
+      <Sidebar state={state} width={sidebar.width} onResize={sidebar.setWidth} />
       <Toolbar state={state} />
       <main id="main">
-        {state.file ? (
-          state.pages.map((page, n) => <PageCanvas key={`${state.file}:${n}`} n={n} page={page} state={state} />)
-        ) : (
-          state.loaded && <EmptyState hasWorkspace={Boolean(state.root)} />
-        )}
+        {!state.file && state.loaded && <EmptyState hasWorkspace={Boolean(state.root)} />}
+        {state.file &&
+          state.pages.map((page, n) => <PageCanvas key={`${state.file}:${n}`} n={n} page={page} state={state} />)}
       </main>
+      {state.reference && (
+        <ReferencePane reference={state.reference} width={referenceWidth.width} onResize={referenceWidth.setWidth} />
+      )}
+      {state.panelOpen && <ClaudePanel state={state} width={panel.width} onResize={panel.setWidth} />}
       {state.file && <ZoomControl zoom={state.zoom} />}
     </div>
   );
